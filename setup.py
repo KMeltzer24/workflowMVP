@@ -26,6 +26,10 @@ setup(
     ],
     python_requires=">=3.8",
     install_requires=[
-        # Add your dependencies here
+        "google-generativeai>=0.3.0",
+        "pyyaml>=6.0",
+        "jinja2>=3.1.0",
+        "requests>=2.28.0",
+        "python-dotenv>=1.0.0",
     ],
 )
