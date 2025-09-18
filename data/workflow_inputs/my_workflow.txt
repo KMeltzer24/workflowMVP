@@ -1,5 +1,0 @@
-1. Create a directory called "working"
-2. Write the text "Working bruh" to file "working/work.txt"
-3. Read the file "working/work.txt"
-4. List files in the "sandbox" directory
-5. Wait for 2 seconds

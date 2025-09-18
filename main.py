@@ -9,12 +9,14 @@ import argparse
 from pathlib import Path
 from workflowmvp.parser import WorkflowParser
 from workflowmvp.agent import WorkflowAgent
+from workflowmvp.video_to_workflow import video_to_workflow_txt
 
 
 def main():
     """Main entry point for the application"""
     parser = argparse.ArgumentParser(description='WorkflowMVP - Generate executable workflows from text descriptions')
-    parser.add_argument('workflow_file', help='Path to the workflow description file (.txt)')
+    parser.add_argument('workflow_file', help='Path to the workflow description file (.txt). If --from-video is used, this will be the output .txt path.')
+    parser.add_argument('--from-video', help='Path to a screen capture video to infer workflow from')
     parser.add_argument('-o', '--output', default='generated_workflow.py', 
                        help='Output file for generated Python code (default: generated_workflow.py)')
     parser.add_argument('--run', action='store_true', 
@@ -34,7 +36,17 @@ def main():
     print("=" * 50)
     
     try:
-        # Step 1: Parse workflow description
+        # Optional: Infer workflow from video first
+        if args.from_video:
+            print(f"🎬 Inferring workflow from video: {args.from_video}")
+            api_key = args.api_key or os.getenv('GEMINI_API_KEY')
+            if not api_key:
+                print("Error: GEMINI_API_KEY is required to infer from video")
+                sys.exit(1)
+            inferred_path = video_to_workflow_txt(args.from_video, args.workflow_file, api_key=api_key, model=args.model)
+            print(f"✅ Inferred workflow saved to: {inferred_path}")
+        
+        # Step 1: Read workflow description
         print(f"📖 Reading workflow from: {args.workflow_file}")
         with open(args.workflow_file, 'r', encoding='utf-8') as f:
             workflow_text = f.read()

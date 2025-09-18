@@ -184,17 +184,50 @@ class ToolRegistry:
     
     def _send_email(self, recipient: str, subject: str, body: str, 
                    smtp_server: str = "smtp.gmail.com", smtp_port: int = 587) -> Dict[str, Any]:
-        """Send email (requires SMTP credentials in environment)"""
+        """Send email with interactive SMTP setup"""
         try:
-            # This is a simplified version - in production, you'd want proper auth
+            # Check if credentials are already set
+            email_user = os.getenv('EMAIL_USER')
+            email_password = os.getenv('EMAIL_PASSWORD')
+            email_from = os.getenv('EMAIL_FROM')
+            
+            # If not set, prompt user for credentials
+            if not all([email_user, email_password, email_from]):
+                print("\n📧 Email Setup Required")
+                print("=" * 30)
+                print("Defaults for Gmail:")
+                print("- SMTP server: smtp.gmail.com")
+                print("- Port 587: STARTTLS (recommended)")
+                print("- Port 465: SSL")
+                print()
+                email_from = input("Enter your email address (e.g., name@gmail.com): ").strip()
+                email_user = input("Enter your email username (use full email, e.g., name@gmail.com): ").strip()
+                email_password = input("Enter your Gmail App Password (generate in Google Account > Security > App passwords): ").strip()
+                smtp_server = input(f"SMTP server [default: {smtp_server}]: ").strip() or smtp_server
+                entered_port = input(f"SMTP port [587 for STARTTLS or 465 for SSL | default: {smtp_port}]: ").strip()
+                if entered_port:
+                    smtp_port = int(entered_port)
+                print()
+            
+            # Create message
             msg = MIMEMultipart()
-            msg['From'] = os.getenv('EMAIL_FROM', 'noreply@example.com')
+            msg['From'] = email_from
             msg['To'] = recipient
             msg['Subject'] = subject
             msg.attach(MIMEText(body, 'plain'))
             
-            # Note: This would need proper SMTP authentication in production
-            return {"success": True, "message": "Email would be sent (SMTP not configured)"}
+            # Send email (auto-select SSL for port 465, STARTTLS otherwise)
+            if smtp_port == 465:
+                server = smtplib.SMTP_SSL(smtp_server, smtp_port)
+            else:
+                server = smtplib.SMTP(smtp_server, smtp_port)
+                server.starttls()
+            server.login(email_user, email_password)
+            text = msg.as_string()
+            server.sendmail(email_from, recipient, text)
+            server.quit()
+            
+            return {"success": True, "message": f"Email sent successfully to {recipient}"}
         except Exception as e:
             return {"success": False, "error": str(e)}
     

@@ -29,10 +29,24 @@ pip install -r requirements.txt
 
 ## Usage
 
-**One-liner:**
+**Usage:**
+
+1. **Set your Gemini API key:**
 ```bash
-export GEMINI_API_KEY="your-api-key-here" && python main.py data/workflow_inputs/my_workflow.txt -o data/generated_workflows/run_workflow.py --run
+export GEMINI_API_KEY="your-api-key-here"
 ```
+
+2a. **Run an existing workflow (.txt):**
+```bash
+python3 main.py data/workflow_texts/YOUR_WORKFLOW_FILE.txt -o data/generated_workflows/run_workflow.py --run
+```
+
+2b. **Infer a workflow from a screen-capture video, then run it:**
+```bash
+python3 main.py data/workflow_texts/inferred_from_video.txt --from-video data/workflow_videos/YOUR_VIDEO.mp4 -o data/generated_workflows/run_from_video.py --run
+```
+
+Note: Replace `YOUR_WORKFLOW_FILE.txt` and `YOUR_VIDEO.mp4` with your actual files.
 
 ## Workflow Description Format
 
@@ -77,7 +91,7 @@ The system includes a comprehensive set of built-in tools:
 
 ## Example Input
 
-Place your workflow descriptions under `data/workflow_inputs/`. A simple example:
+Place your workflow descriptions under `data/workflow_texts/`. A simple example:
 
 ```
 1. Create a directory called "sandbox"
@@ -86,6 +100,15 @@ Place your workflow descriptions under `data/workflow_inputs/`. A simple example
 4. List files in the "sandbox" directory
 5. Wait for 2 seconds
 ```
+
+## Notes
+
+- Email sending uses the built-in `send_email` tool. If `EMAIL_USER`, `EMAIL_PASSWORD`, and `EMAIL_FROM` are not set, the program will prompt you.
+- Gmail defaults are shown during the prompt:
+  - SMTP server: `smtp.gmail.com`
+  - Port `587` (STARTTLS, recommended) or `465` (SSL)
+  - Username: full email (e.g., `name@gmail.com`)
+  - Password: Gmail App Password (generate under Google Account → Security → App passwords)
 
 ## How It Works
 
@@ -102,7 +125,8 @@ This project uses Python 3.8+ and follows standard Python packaging conventions.
 
 ```
 data/
-├── workflow_inputs/     # Your workflow .txt inputs
+├── workflow_texts/     # Your workflow .txt inputs
+├── workflow_videos/    # Screen capture videos to infer workflows
 ├── generated_workflows/ # Generated workflow scripts
 └── outputs/            # Other output files
 workflowmvp/

@@ -80,17 +80,20 @@ Available tools:
 
 Instructions:
 1. Generate a complete Python script that executes the given workflow steps
-2. Use the available tools from the tool registry
-3. Handle errors gracefully with try-catch blocks
-4. Include proper imports and setup
-5. Add logging to track workflow progress
-6. Make the code executable and well-structured
-7. Use meaningful variable names
-8. Include comments explaining each step
-9. CRITICAL: The script MUST have a main() function that executes the workflow
-10. Use if __name__ == "__main__": main() pattern
+2. CRITICAL: Use ONLY the available tools from the tool registry - do NOT create custom functions
+3. Import and use: from workflowmvp.tools import ToolRegistry
+4. Initialize tools = ToolRegistry() and call tools.get_tool().function() for each action
+5. If steps describe GUI actions to compose and send an email (e.g., open client, new message, fill recipient/subject/body, click send), COLLAPSE them into a single 'send_email' tool call using extracted recipient/subject/body. Do NOT log manual-interaction placeholders.
+6. Handle errors gracefully with try-catch blocks
+7. Include proper imports and setup
+8. Add logging to track workflow progress
+9. Make the code executable and well-structured
+10. Use meaningful variable names
+11. Include comments explaining each step
+12. CRITICAL: The script MUST have a main() function that executes the workflow
+13. Use if __name__ == "__main__": main() pattern
 
-The generated code should be a complete, runnable Python script with a main() function."""
+The generated code should be a complete, runnable Python script with a main() function that uses the tool registry."""
 
     def _create_user_prompt(self, steps: List[WorkflowStep]) -> str:
         """Create user prompt with workflow steps"""

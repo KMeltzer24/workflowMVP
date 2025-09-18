@@ -1,0 +1,5 @@
+1. Open Outlook and click "New email".
+2. Add recipient email address: kevin.melver@gmail.com in the "To" field.
+3. Add subject: "Test".
+4. Compose the email body: "Workflow Test".
+5. Send the email.
