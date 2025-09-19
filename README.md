@@ -58,7 +58,9 @@ export GEMINI_API_KEY="your-api-key-here"
 
 Or create a `.env` file:
 ```bash
-echo "GEMINI_API_KEY=your-api-key-here" > .env
+cat > .env << 'EOF'
+GEMINI_API_KEY=your-gemini-api-key-here
+EOF
 ```
 
 ## Usage
@@ -221,9 +223,12 @@ The `send_email` tool supports interactive setup. If email credentials aren't se
 
 **Environment Variables (recommended):**
 ```bash
+export GEMINI_API_KEY="your-gemini-api-key-here"
 export EMAIL_USER="your-email@gmail.com"
-export EMAIL_PASSWORD="your-app-password"
+export EMAIL_PASSWORD="your-gmail-app-password"
 export EMAIL_FROM="your-email@gmail.com"
+export SMTP_SERVER="smtp.gmail.com"
+export SMTP_PORT="587"
 ```
 
 **Gmail Configuration:**
@@ -232,8 +237,8 @@ export EMAIL_FROM="your-email@gmail.com"
 - Username: full email address (e.g., `name@gmail.com`)
 - Password: Gmail App Password (generate under Google Account → Security → App passwords)
 
-### API Keys
-- **Gemini API**: Required for video analysis and code generation
+### Required vs Optional
+- **GEMINI_API_KEY**: Required for video analysis and code generation
 - **Email credentials**: Optional (will prompt if not set)
 
 ## How It Works
