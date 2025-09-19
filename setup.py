@@ -31,5 +31,6 @@ setup(
         "jinja2>=3.1.0",
         "requests>=2.28.0",
         "python-dotenv>=1.0.0",
+        "opencv-python>=4.9.0.80",
     ],
 )
