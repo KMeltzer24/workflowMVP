@@ -75,6 +75,15 @@ python main.py data/workflow_videos/my_task.mp4
 python main.py data/workflow_texts/my_workflow.txt --from-text
 ```
 
+**Generate without running (--no-run flag):**
+```bash
+# Generate the Python code but don't execute it
+python main.py data/workflow_texts/my_workflow.txt --from-text --no-run
+
+# Then run it manually later
+python data/generated_workflows/my_workflow.py
+```
+
 ### How It Works
 
 1. **Video Processing** (default mode):

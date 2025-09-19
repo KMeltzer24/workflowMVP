@@ -50,10 +50,32 @@ class WorkflowAgent:
             generated_code = response.text
             
             # Clean up the code (remove markdown formatting if present)
+            generated_code = generated_code.strip()
+            
+            # Remove markdown code fences
             if generated_code.startswith('```python'):
                 generated_code = generated_code[9:]
+            elif generated_code.startswith('```'):
+                generated_code = generated_code[3:]
+            
             if generated_code.endswith('```'):
                 generated_code = generated_code[:-3]
+            
+            # Remove any trailing documentation/explanations after the Python code
+            lines = generated_code.split('\n')
+            python_lines = []
+            
+            for line in lines:
+                # Stop at markdown-style sections, installation instructions, or code fences
+                if (line.strip().startswith('##') or 
+                    line.strip().startswith('**') or 
+                    'install' in line.lower() or
+                    line.strip() == '```' or
+                    line.strip().startswith('```')):
+                    break
+                python_lines.append(line)
+            
+            generated_code = '\n'.join(python_lines).strip()
             
             # Write the generated code to file
             with open(output_file, 'w', encoding='utf-8') as f:
@@ -78,22 +100,70 @@ class WorkflowAgent:
 Available tools:
 {tools_info}
 
-Instructions:
-1. Generate a complete Python script that executes the given workflow steps
-2. CRITICAL: Use ONLY the available tools from the tool registry - do NOT create custom functions
-3. Import and use: from workflowmvp.tools import ToolRegistry
-4. Initialize tools = ToolRegistry() and call tools.get_tool().function() for each action
-5. If steps describe GUI actions to compose and send an email (e.g., open client, new message, fill recipient/subject/body, click send), COLLAPSE them into a single 'send_email' tool call using extracted recipient/subject/body. Do NOT log manual-interaction placeholders.
-6. Handle errors gracefully with try-catch blocks
-7. Include proper imports and setup
-8. Add logging to track workflow progress
-9. Make the code executable and well-structured
-10. Use meaningful variable names
-11. Include comments explaining each step
-12. CRITICAL: The script MUST have a main() function that executes the workflow
-13. Use if __name__ == "__main__": main() pattern
+CRITICAL REQUIREMENTS:
+1. ALWAYS start with these imports:
+   ```python
+   import logging
+   import json
+   import os
+   from dotenv import load_dotenv
+   from workflowmvp.tools import ToolRegistry
+   
+   # Load environment variables
+   load_dotenv()
+   ```
 
-The generated code should be a complete, runnable Python script with a main() function that uses the tool registry."""
+2. Tool return values: ALL tools return dictionaries with 'success', 'content'/'result', and 'error' keys
+   - download tool returns: {{"success": True, "content": "response_text", "size": 1234}}
+   - read_file tool returns: {{"success": True, "content": "file_content", "size": 1234}}
+   - NEVER use json.loads() on tool results directly - use result['content']
+
+3. Email configuration: Use environment variables with fallbacks:
+   ```python
+   smtp_server = os.getenv('SMTP_SERVER', 'smtp.gmail.com')
+   smtp_port = int(os.getenv('SMTP_PORT', '587'))
+   ```
+
+4. Error handling: Always check tool results with minimal logging:
+   ```python
+   result = tool.function(...)
+   if not result.get('success'):
+       logger.error(f"Failed: {{result.get('error')}}")
+       return
+   # Don't log success for every small operation
+   ```
+
+5. Tool usage: ALWAYS use tools.get_tool('tool_name').function() - NEVER use tools.get():
+   ```python
+   tools = ToolRegistry()
+   download_tool = tools.get_tool('download')
+   result = download_tool.function(url='https://example.com')
+   ```
+
+6. JSON parsing: When processing downloaded JSON data:
+   ```python
+   download_result = download_tool.function(url=api_url)
+   if download_result.get('success'):
+       json_data = json.loads(download_result['content'])
+   ```
+
+8. COLLAPSE email GUI steps into single send_email call with extracted recipient/subject/body
+9. Use meaningful variable names and add high-level logging for major accomplishments only:
+   ```python
+   # LOG THESE: Major operations and results
+   logger.info("Fetching Bitcoin price from API...")
+   logger.info("✅ Price retrieved: $45,230")
+   logger.info("Sending email notification...")
+   logger.info("✅ Email sent to user@example.com")
+   
+   # DON'T LOG: Small steps like filling forms, clicking buttons, etc.
+   # Skip: "Filling subject field", "Clicking send button", "Opening email client"
+   ```
+10. MUST have main() function and if __name__ == "__main__": main() pattern
+
+IMPORTANT: Generate ONLY Python code - no markdown, no documentation, no explanations.
+Output a complete, runnable Python script that properly handles tool responses and uses environment variables.
+Start with imports and end with if __name__ == "__main__": main()"""
 
     def _create_user_prompt(self, steps: List[WorkflowStep]) -> str:
         """Create user prompt with workflow steps"""

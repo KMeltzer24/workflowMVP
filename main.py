@@ -7,9 +7,13 @@ import os
 import sys
 import argparse
 from pathlib import Path
+from dotenv import load_dotenv
 from workflowmvp.parser import WorkflowParser
 from workflowmvp.agent import WorkflowAgent
 from workflowmvp.video_to_workflow import video_to_workflow_txt
+
+# Load environment variables from .env file
+load_dotenv()
 
 
 def main():
@@ -17,6 +21,7 @@ def main():
     parser = argparse.ArgumentParser(description='WorkflowMVP - Generate and run workflows (video by default, or text with --from-text)')
     parser.add_argument('input', help='Path to a screen-capture video (default). Use --from-text to pass a .txt workflow instead')
     parser.add_argument('--from-text', action='store_true', help='Treat the positional argument as a .txt workflow instead of a video')
+    parser.add_argument('--no-run', action='store_true', help='Generate the Python workflow code but do not execute it')
 
     args = parser.parse_args()
 
@@ -41,7 +46,6 @@ def main():
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
     
     print("🚀 WorkflowMVP - Automated Workflow Generator")
-    print("=" * 50)
     
     try:
         # Maybe infer from video (default path)
@@ -57,7 +61,6 @@ def main():
             inferred_path = workflow_txt_path
 
         # Step 1: Read workflow description
-        print(f"📖 Reading workflow from: {inferred_path}")
         with open(inferred_path, 'r', encoding='utf-8') as f:
             workflow_text = f.read()
         
@@ -70,9 +73,7 @@ def main():
             print("❌ No workflow steps found in the file")
             sys.exit(1)
         
-        print(f"✅ Found {len(steps)} workflow steps:")
-        for i, step in enumerate(steps, 1):
-            print(f"   {i}. {step.description}")
+        print(f"✅ Found {len(steps)} workflow steps")
         
         # Step 3: Generate executable code
         print("🤖 Generating executable code...")
@@ -82,10 +83,8 @@ def main():
         print(f"✅ Generated workflow code: {output_path}")
         
         # Step 4: Optionally run the workflow
-        # Always run immediately (no flag)
-        if True:
+        if not args.no_run:
             print("🏃 Running generated workflow...")
-            print("-" * 30)
             
             # Import and run the generated module
             import importlib.util
@@ -106,7 +105,11 @@ def main():
                 print("❌ Generated code doesn't have a main() or execute_workflow() function")
                 sys.exit(1)
         else:
-            print(f"\n💡 To run the workflow later: python {output_path}")
+            print(f"\n💡 To run the workflow later: python3 {output_path}")
+            print(f"📁 Generated files:")
+            if not args.from_text:
+                print(f"   - Workflow text: {workflow_txt_path}")
+            print(f"   - Python script: {output_path}")
     
     except KeyboardInterrupt:
         print("\n⏹️  Workflow generation cancelled by user")
