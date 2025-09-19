@@ -1,0 +1,7 @@
+Here's a summary of the workflow shown in the screenshots:
+
+1. Access Gmail and open a new message.
+2. Add recipient: kevinmeltzer1@gmail.com.
+3. Add subject: Hello World.
+4. Compose the email body: "Hello there, General Kenobi!"
+5. Send the email.

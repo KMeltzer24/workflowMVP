@@ -14,41 +14,51 @@ from workflowmvp.video_to_workflow import video_to_workflow_txt
 
 def main():
     """Main entry point for the application"""
-    parser = argparse.ArgumentParser(description='WorkflowMVP - Generate executable workflows from text descriptions')
-    parser.add_argument('workflow_file', help='Path to the workflow description file (.txt). If --from-video is used, this will be the output .txt path.')
-    parser.add_argument('--from-video', help='Path to a screen capture video to infer workflow from')
-    parser.add_argument('-o', '--output', default='generated_workflow.py', 
-                       help='Output file for generated Python code (default: generated_workflow.py)')
-    parser.add_argument('--run', action='store_true', 
-                       help='Run the generated workflow immediately')
-    parser.add_argument('--api-key', help='Gemini API key (or set GEMINI_API_KEY env var)')
-    parser.add_argument('--model', default='gemini-1.5-flash', 
-                       help='Gemini model to use (default: gemini-1.5-flash)')
-    
+    parser = argparse.ArgumentParser(description='WorkflowMVP - Generate and run workflows (video by default, or text with --from-text)')
+    parser.add_argument('input', help='Path to a screen-capture video (default). Use --from-text to pass a .txt workflow instead')
+    parser.add_argument('--from-text', action='store_true', help='Treat the positional argument as a .txt workflow instead of a video')
+
     args = parser.parse_args()
-    
-    # Check if workflow file exists
-    if not os.path.exists(args.workflow_file):
-        print(f"Error: Workflow file '{args.workflow_file}' not found")
-        sys.exit(1)
+
+    if args.from_text:
+        # Validate text exists
+        workflow_txt_path = args.input
+        if not os.path.exists(workflow_txt_path):
+            print(f"Error: Workflow file '{workflow_txt_path}' not found")
+            sys.exit(1)
+        base_name = Path(workflow_txt_path).stem
+        output_path = os.path.join('data', 'generated_workflows', f'{base_name}.py')
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    else:
+        # Video mode (default)
+        if not os.path.exists(args.input):
+            print(f"Error: Video file '{args.input}' not found")
+            sys.exit(1)
+        base_name = Path(args.input).stem
+        workflow_txt_path = os.path.join('data', 'workflow_texts', f'{base_name}.txt')
+        output_path = os.path.join('data', 'generated_workflows', f'{base_name}.py')
+        os.makedirs(os.path.dirname(workflow_txt_path), exist_ok=True)
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
     
     print("🚀 WorkflowMVP - Automated Workflow Generator")
     print("=" * 50)
     
     try:
-        # Optional: Infer workflow from video first
-        if args.from_video:
-            print(f"🎬 Inferring workflow from video: {args.from_video}")
-            api_key = args.api_key or os.getenv('GEMINI_API_KEY')
+        # Maybe infer from video (default path)
+        if not args.from_text:
+            print(f"🎬 Inferring workflow from video: {args.input}")
+            api_key = os.getenv('GEMINI_API_KEY')
             if not api_key:
                 print("Error: GEMINI_API_KEY is required to infer from video")
                 sys.exit(1)
-            inferred_path = video_to_workflow_txt(args.from_video, args.workflow_file, api_key=api_key, model=args.model)
+            inferred_path = video_to_workflow_txt(args.input, workflow_txt_path, api_key=api_key, model='gemini-1.5-flash')
             print(f"✅ Inferred workflow saved to: {inferred_path}")
-        
+        else:
+            inferred_path = workflow_txt_path
+
         # Step 1: Read workflow description
-        print(f"📖 Reading workflow from: {args.workflow_file}")
-        with open(args.workflow_file, 'r', encoding='utf-8') as f:
+        print(f"📖 Reading workflow from: {inferred_path}")
+        with open(inferred_path, 'r', encoding='utf-8') as f:
             workflow_text = f.read()
         
         # Step 2: Parse workflow steps
@@ -66,19 +76,20 @@ def main():
         
         # Step 3: Generate executable code
         print("🤖 Generating executable code...")
-        agent = WorkflowAgent(api_key=args.api_key, model=args.model)
-        generated_code = agent.generate_workflow_code(steps, args.output)
+        agent = WorkflowAgent(api_key=os.getenv('GEMINI_API_KEY'), model='gemini-1.5-flash')
+        generated_code = agent.generate_workflow_code(steps, output_path)
         
-        print(f"✅ Generated workflow code: {args.output}")
+        print(f"✅ Generated workflow code: {output_path}")
         
         # Step 4: Optionally run the workflow
-        if args.run:
+        # Always run immediately (no flag)
+        if True:
             print("🏃 Running generated workflow...")
             print("-" * 30)
             
             # Import and run the generated module
             import importlib.util
-            spec = importlib.util.spec_from_file_location("generated_workflow", args.output)
+            spec = importlib.util.spec_from_file_location("generated_workflow", output_path)
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
             
@@ -95,8 +106,7 @@ def main():
                 print("❌ Generated code doesn't have a main() or execute_workflow() function")
                 sys.exit(1)
         else:
-            print(f"\n💡 To run the workflow: python {args.output}")
-            print("   Or use: python main.py <workflow_file> --run")
+            print(f"\n💡 To run the workflow later: python {output_path}")
     
     except KeyboardInterrupt:
         print("\n⏹️  Workflow generation cancelled by user")

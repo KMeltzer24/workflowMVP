@@ -1,19 +1,19 @@
 # WorkflowMVP
 
-🚀 **Automated Workflow Generator** - Transform text descriptions into executable Python programs using Google's Gemini AI.
+🚀 **Automated Workflow Generator** - Turn screen‑capture videos into executable Python workflows using Google's Gemini AI.
 
 ## Description
 
-WorkflowMVP is a powerful Python tool that takes natural language workflow descriptions and automatically generates executable Python programs. It uses Google's Gemini AI to understand your workflow requirements and creates code that calls the necessary tools to execute your tasks.
+WorkflowMVP takes a screen‑capture video of a task (e.g., sending an email) and generates a runnable Python script that performs the same workflow using built‑in tools (file I/O, HTTP, email, etc.). You can also pass a text workflow if you prefer.
 
 ### Key Features
 
-- 📝 **Natural Language Processing**: Describe workflows in plain English
-- 🤖 **AI-Powered Code Generation**: Uses Google's Gemini AI to generate executable code
-- 🛠️ **Rich Tool Library**: Built-in tools for common operations (HTTP requests, file I/O, email, etc.)
-- 🔄 **Dependency Resolution**: Automatically handles step dependencies
-- 📊 **Progress Tracking**: Built-in logging and error handling
-- 🎯 **Flexible Output**: Generate standalone Python scripts
+- 🎬 **Video → Workflow**: Infer steps from screen‑capture videos with Gemini
+- 🧾 **Optional Text Input**: You can also run a saved `.txt` workflow with `--from-text`
+- 🛠️ **Built‑in Tools**: File I/O, HTTP requests, email (SMTP with prompts), wait/delays
+- 🤖 **Code Generation**: Produces a complete Python script with a `main()` function
+- 📈 **Auto Run + Logs**: Generates, runs immediately, and logs each step
+- 📁 **Organized Outputs**: All artifacts live under `data/` (texts, scripts, outputs)
 
 ## Installation
 
@@ -36,44 +36,21 @@ pip install -r requirements.txt
 export GEMINI_API_KEY="your-api-key-here"
 ```
 
-2a. **Run an existing workflow (.txt):**
+2a. **Run directly from a video (auto‑generates .txt and .py):**
 ```bash
-python3 main.py data/workflow_texts/YOUR_WORKFLOW_FILE.txt -o data/generated_workflows/run_workflow.py --run
+python3 main.py data/workflow_videos/YOUR_VIDEO.mp4
 ```
 
-2b. **Infer a workflow from a screen-capture video, then run it:**
+This infers steps from the video, saves a workflow text at `data/workflow_texts/YOUR_VIDEO.txt`, generates `data/generated_workflows/YOUR_VIDEO.py`, and runs it immediately.
+
+2b. **Run from a text workflow instead:**
 ```bash
-python3 main.py data/workflow_texts/inferred_from_video.txt --from-video data/workflow_videos/YOUR_VIDEO.mp4 -o data/generated_workflows/run_from_video.py --run
+python3 main.py data/workflow_texts/YOUR_WORKFLOW_FILE.txt --from-text
 ```
 
-Note: Replace `YOUR_WORKFLOW_FILE.txt` and `YOUR_VIDEO.mp4` with your actual files.
+Note: Replace `YOUR_VIDEO.mp4` or `YOUR_WORKFLOW_FILE.txt` with your actual files.
 
-## Workflow Description Format
 
-Write your workflows in plain text using numbered steps or bullet points:
-
-### Example 1: Simple Data Processing
-```
-Simple Data Processing Workflow
-
-1. Download data from https://jsonplaceholder.typicode.com/posts/1
-2. Read the downloaded data and process it to extract the title
-3. Write the processed title to a file called "output.txt"
-4. Wait for 2 seconds
-5. Send an email notification that the workflow is complete
-```
-
-### Example 2: File Processing
-```
-File Processing Workflow
-
-Step 1: Create a directory called "processed_files"
-Step 2: Download a sample file from https://httpbin.org/json
-Step 3: Read the downloaded file content
-Step 4: Process the data to convert it to uppercase
-Step 5: Write the processed data to a new file
-Step 6: List all files in the processed_files directory
-```
 
 ## Available Tools
 
@@ -91,7 +68,7 @@ The system includes a comprehensive set of built-in tools:
 
 ## Example Input
 
-Place your workflow descriptions under `data/workflow_texts/`. A simple example:
+Workflows are typically inferred from videos and saved under `data/workflow_texts/`. A simple example of a text format (if you write one manually):
 
 ```
 1. Create a directory called "sandbox"
@@ -112,10 +89,10 @@ Place your workflow descriptions under `data/workflow_texts/`. A simple example:
 
 ## How It Works
 
-1. **Parse**: The system parses your text description into structured workflow steps
-2. **Analyze**: Each step is analyzed to determine the appropriate action and parameters
-3. **Generate**: An AI agent generates executable Python code using the available tools
-4. **Execute**: The generated code can be run immediately or saved for later use
+1. **Infer**: Extracts representative frames from your screen‑capture video and asks Gemini to infer high‑level steps.
+2. **Parse**: Converts the inferred steps into structured actions (e.g., send_email, write_file, wait).
+3. **Generate**: Builds a complete, runnable Python script that uses the built‑in tool registry.
+4. **Execute**: Runs the generated script immediately and logs results; artifacts are saved under `data/`.
 
 ## Development
 
@@ -125,25 +102,30 @@ This project uses Python 3.8+ and follows standard Python packaging conventions.
 
 ```
 data/
-├── workflow_texts/     # Your workflow .txt inputs
-├── workflow_videos/    # Screen capture videos to infer workflows
-├── generated_workflows/ # Generated workflow scripts
-└── outputs/            # Other output files
+├── workflow_videos/       # Your screen‑capture videos (input)
+├── workflow_texts/        # Inferred (or manual) workflow text files
+├── generated_workflows/   # Generated Python scripts
+└── outputs/               # Other output files/artifacts
 workflowmvp/
-├── __init__.py         # Package initialization (required for Python imports)
-├── parser.py           # Workflow text parser
-├── agent.py            # Gemini AI agent for code generation
-├── tools.py            # Tool registry and implementations
-main.py                 # CLI entry point
-requirements.txt        # Dependencies
-setup.py                # Package metadata (for pip install -e .)
+├── __init__.py            # Package metadata
+├── video_to_workflow.py   # Frame sampling + Gemini inference
+├── parser.py              # Convert inferred text → structured steps/actions
+├── agent.py               # Generate Python code (Gemini); enforce main()
+└── tools.py               # Tool registry (download, read/write, email, wait, http, etc.)
+main.py                    # CLI (video by default; --from-text for text input)
+requirements.txt           # Dependencies
+setup.py                   # Packaging metadata (optional)
 ```
 
 ### File Explanations
 
-- **`workflowmvp/__init__.py`**: Required for Python to recognize `workflowmvp` as a package. Allows imports like `from workflowmvp.parser import WorkflowParser`
-- **`setup.py`**: Package metadata for installation. Allows `pip install -e .` to install the package in development mode
-- **`data/`**: Contains all user data (inputs, generated workflows, outputs)
+- **`main.py`**: One‑command interface. Pass a video; it infers, generates, and runs. Use `--from-text` to run a saved text workflow instead.
+- **`workflowmvp/video_to_workflow.py`**: Samples frames and asks Gemini to infer the step list.
+- **`workflowmvp/parser.py`**: Converts inferred text into structured steps/actions with parameters.
+- **`workflowmvp/agent.py`**: Generates the final Python script using the tool registry and enforces a `main()` entrypoint.
+- **`workflowmvp/tools.py`**: Central tool catalog (email, file I/O, HTTP, wait, etc.).
+- **`data/`**: Your inputs (videos), inferred texts, generated scripts, and outputs.
+- **`requirements.txt` / `setup.py`**: Dependencies and optional packaging.
 
 ### Adding Custom Tools
 
