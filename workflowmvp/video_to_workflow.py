@@ -3,29 +3,186 @@ Video to Workflow - Extract frames from a video and infer a text workflow using 
 """
 
 import os
-import cv2
+import cv2   
 import tempfile
 import shutil
-import numpy as np
-from typing import List, Tuple
-import google.generativeai as genai
-
+import numpy as np  
+from typing import List, Tuple, Dict, Any
+import google.generativeai as genai  
 
 def calculate_frame_difference(frame1: np.ndarray, frame2: np.ndarray) -> float:
-    """Calculate the difference between two frames using histogram comparison"""
+    """Calculate the difference between two frames using multiple methods"""
     try:
         # Convert to grayscale for comparison
         gray1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
         gray2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
         
-        # Calculate histogram
+        # Method 1: Histogram comparison
         hist1 = cv2.calcHist([gray1], [0], None, [256], [0, 256])
         hist2 = cv2.calcHist([gray2], [0], None, [256], [0, 256])
+        hist_diff = 1.0 - cv2.compareHist(hist1, hist2, cv2.HISTCMP_CORREL)
         
-        # Compare histograms (lower value = more similar)
-        return cv2.compareHist(hist1, hist2, cv2.HISTCMP_CORREL)
+        # Method 2: Structural similarity
+        ssim_score = calculate_ssim(gray1, gray2)
+        ssim_diff = 1.0 - ssim_score
+        
+        # Method 3: Edge detection difference
+        edges1 = cv2.Canny(gray1, 50, 150)
+        edges2 = cv2.Canny(gray2, 50, 150)
+        edge_diff = np.sum(np.abs(edges1.astype(float) - edges2.astype(float))) / (edges1.shape[0] * edges1.shape[1])
+        edge_diff = min(edge_diff / 255.0, 1.0)  # Normalize
+        
+        # Combine methods with weights
+        combined_diff = (hist_diff * 0.4 + ssim_diff * 0.4 + edge_diff * 0.2)
+        return min(combined_diff, 1.0)
     except:
-        return 0.0
+        return 0.5  # Default moderate difference
+
+def calculate_ssim(img1: np.ndarray, img2: np.ndarray) -> float:
+    """Calculate Structural Similarity Index (SSIM) between two images"""
+    try:
+        # Ensure images are the same size
+        if img1.shape != img2.shape:
+            img2 = cv2.resize(img2, (img1.shape[1], img1.shape[0]))
+        
+        # Calculate SSIM components
+        mu1 = cv2.GaussianBlur(img1.astype(np.float64), (11, 11), 1.5)
+        mu2 = cv2.GaussianBlur(img2.astype(np.float64), (11, 11), 1.5)
+        
+        mu1_sq = mu1 * mu1
+        mu2_sq = mu2 * mu2
+        mu1_mu2 = mu1 * mu2
+        
+        sigma1_sq = cv2.GaussianBlur(img1.astype(np.float64) * img1.astype(np.float64), (11, 11), 1.5) - mu1_sq
+        sigma2_sq = cv2.GaussianBlur(img2.astype(np.float64) * img2.astype(np.float64), (11, 11), 1.5) - mu2_sq
+        sigma12 = cv2.GaussianBlur(img1.astype(np.float64) * img2.astype(np.float64), (11, 11), 1.5) - mu1_mu2
+        
+        c1 = (0.01 * 255) ** 2
+        c2 = (0.03 * 255) ** 2
+        
+        ssim_map = ((2 * mu1_mu2 + c1) * (2 * sigma12 + c2)) / ((mu1_sq + mu2_sq + c1) * (sigma1_sq + sigma2_sq + c2))
+        return np.mean(ssim_map)
+    except:
+        return 0.5  # Default moderate similarity
+
+def detect_ui_elements(frame: np.ndarray) -> Dict[str, Any]:
+    """Detect UI elements in a frame using computer vision"""
+    try:
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        
+        # Detect buttons (rectangular shapes)
+        edges = cv2.Canny(gray, 50, 150)
+        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        buttons = []
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area > 100:  # Filter small contours
+                x, y, w, h = cv2.boundingRect(contour)
+                aspect_ratio = w / h
+                if 0.5 < aspect_ratio < 3.0:  # Button-like aspect ratio
+                    buttons.append({
+                        'type': 'button',
+                        'x': x, 'y': y, 'w': w, 'h': h,
+                        'area': area
+                    })
+        
+        # Detect text regions using MSER
+        mser = cv2.MSER_create()
+        regions, _ = mser.detectRegions(gray)
+        text_regions = []
+        for region in regions:
+            if len(region) > 10:  # Filter small regions
+                x, y, w, h = cv2.boundingRect(region.reshape(-1, 1, 2))
+                text_regions.append({
+                    'type': 'text',
+                    'x': x, 'y': y, 'w': w, 'h': h
+                })
+        
+        return {
+            'buttons': buttons,
+            'text_regions': text_regions,
+            'total_elements': len(buttons) + len(text_regions)
+        }
+    except:
+        return {'buttons': [], 'text_regions': [], 'total_elements': 0}
+
+def extract_text_from_frame(frame: np.ndarray) -> str:
+    """Extract text from frame using basic OCR techniques"""
+    try:
+        # Convert to grayscale
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        
+        # Apply threshold to get better text contrast
+        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        
+        # Find contours that might be text
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        text_candidates = []
+        for contour in contours:
+            x, y, w, h = cv2.boundingRect(contour)
+            aspect_ratio = w / h
+            area = w * h
+            
+            # Filter for text-like regions
+            if 0.1 < aspect_ratio < 10 and area > 50:
+                text_candidates.append((x, y, w, h))
+        
+        # Sort by y-coordinate (top to bottom)
+        text_candidates.sort(key=lambda x: x[1])
+        
+        # Extract text regions (simplified - would need actual OCR library for real text)
+        text_info = []
+        for x, y, w, h in text_candidates:
+            text_info.append(f"Text region at ({x},{y}) size {w}x{h}")
+        
+        return " | ".join(text_info)
+    except:
+        return ""
+
+def analyze_frame_content(frame: np.ndarray) -> Dict[str, Any]:
+    """Analyze frame content for workflow inference"""
+    try:
+        # Basic color analysis
+        mean_color = np.mean(frame, axis=(0, 1))
+        dominant_color = np.argmax(mean_color)
+        color_names = ['Blue', 'Green', 'Red']
+        dominant_color_name = color_names[dominant_color] if dominant_color < 3 else 'Unknown'
+        
+        # Brightness analysis
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        brightness = np.mean(gray)
+        
+        # Edge density (indicates complexity)
+        edges = cv2.Canny(gray, 50, 150)
+        edge_density = np.sum(edges > 0) / (edges.shape[0] * edges.shape[1])
+        
+        # UI element detection
+        ui_elements = detect_ui_elements(frame)
+        
+        # Text extraction
+        text_content = extract_text_from_frame(frame)
+        
+        return {
+            'dominant_color': dominant_color_name,
+            'brightness': float(brightness),
+            'edge_density': float(edge_density),
+            'ui_elements': ui_elements,
+            'text_content': text_content,
+            'has_text': len(text_content) > 0,
+            'complexity': 'high' if edge_density > 0.1 else 'medium' if edge_density > 0.05 else 'low'
+        }
+    except:
+        return {
+            'dominant_color': 'Unknown',
+            'brightness': 128.0,
+            'edge_density': 0.0,
+            'ui_elements': {'buttons': [], 'text_regions': [], 'total_elements': 0},
+            'text_content': '',
+            'has_text': False,
+            'complexity': 'low'
+        }
 
 def sample_frames_intelligent(video_path: str, max_frames: int = 15) -> Tuple[List[str], str]:
     """
@@ -214,7 +371,7 @@ def video_to_workflow_txt(video_path: str, output_txt: str, api_key: str, model:
         # Write the workflow text
         with open(output_txt, "w", encoding="utf-8") as f:
             f.write(steps_text.strip() + "\n")
-        
+            
         return output_txt
         
     except Exception as e:

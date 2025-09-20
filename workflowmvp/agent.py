@@ -148,6 +148,9 @@ CRITICAL REQUIREMENTS:
    ```
 
 8. COLLAPSE email GUI steps into single send_email call with extracted recipient/subject/body
+   - CRITICAL: Extract recipient, subject, and body from step descriptions
+   - Look for patterns like "enter `email@example.com`" or "enter 'email@example.com'"
+   - Use the EXACT values from the step descriptions, not generic placeholders
 9. Use meaningful variable names and add high-level logging for major accomplishments only:
    ```python
    # LOG THESE: Major operations and results
@@ -181,76 +184,9 @@ Step {i} ({step.step_id}):
 
 {''.join(steps_info)}
 
-The script should execute these steps in order, handling dependencies and errors appropriately."""
+The script should execute these steps in order, handling dependencies and errors appropriately.
 
-    def _generate_fallback_code(self, steps: List[WorkflowStep], output_file: str) -> str:
-        """Generate code using template-based approach if AI fails"""
-        code_lines = [
-            "#!/usr/bin/env python3",
-            '"""Generated workflow script"""',
-            "",
-            "import os",
-            "import sys",
-            "import logging",
-            "import json",
-            "from typing import Dict, Any",
-            "",
-            "# Import tool registry",
-            "from workflowmvp.tools import ToolRegistry",
-            "",
-            "# Setup logging",
-            "logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')",
-            "logger = logging.getLogger(__name__)",
-            "",
-            "def main():",
-            "    \"\"\"Main workflow execution\"\"\"",
-            "    logger.info('Starting workflow execution')",
-            "    ",
-            "    # Initialize tool registry",
-            "    tools = ToolRegistry()",
-            "    ",
-            "    # Workflow results storage",
-            "    results = {}",
-            "    ",
-        ]
-        
-        # Add each step
-        for i, step in enumerate(steps):
-            # Filter out description from parameters
-            tool_params = {k: v for k, v in step.parameters.items() if k != 'description'}
-            
-            code_lines.extend([
-                f"    # Step {i+1}: {step.description}",
-                f"    try:",
-                f"        logger.info('Executing step {i+1}: {step.action}')",
-                f"        tool = tools.get_tool('{step.action}')",
-                f"        if tool:",
-                f"            result = tool.function(**{json.dumps(tool_params)})",
-                f"            results['{step.step_id}'] = result",
-                f"            logger.info(f'Step {i+1} completed: {{result}}')",
-                f"        else:",
-                f"            logger.error(f'Tool not found: {step.action}')",
-                f"            results['{step.step_id}'] = {{'success': False, 'error': 'Tool not found'}}",
-                f"    except Exception as e:",
-                f"        logger.error(f'Step {i+1} failed: {{e}}')",
-                f"        results['{step.step_id}'] = {{'success': False, 'error': str(e)}}",
-                f"    ",
-            ])
-        
-        code_lines.extend([
-            "    # Final results",
-            "    logger.info('Workflow completed')",
-            "    print(json.dumps(results, indent=2))",
-            "    return results",
-            "",
-            "if __name__ == '__main__':",
-            "    main()",
-        ])
-        
-        generated_code = "\n".join(code_lines)
-        
-        # Write to file
-        with open(output_file, 'w', encoding='utf-8') as f:
-            f.write(generated_code)
-        
-        return generated_code
+CRITICAL: When you see step descriptions that contain specific values (like email addresses, subjects, URLs, etc.), 
+you MUST extract and use those EXACT values in your generated code. Do not use generic placeholders or 
+make up values - use what's actually written in the step descriptions."""
+

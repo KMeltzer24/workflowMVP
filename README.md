@@ -1,20 +1,23 @@
 # WorkflowMVP
 
-🚀 **Automated Workflow Generator** - Turn screen‑capture videos into executable Python workflows using Google's Gemini AI.
+🚀 **Advanced Workflow Automation Platform** - Turn screen‑capture videos or text descriptions into executable Python workflows using Google's Gemini AI.
 
 ## Description
 
-WorkflowMVP is a powerful automation tool that can:
+WorkflowMVP is a comprehensive automation platform that can:
 - **Convert screen-capture videos** into executable Python workflows using AI vision
 - **Process text-based workflow descriptions** into runnable code
 - **Generate complete Python scripts** that automate complex multi-step tasks
 - **Execute workflows immediately** with comprehensive logging
+- **Provide a modern web interface** for non-technical users
+- **Handle advanced data processing** including databases, APIs, and file operations
 
-Perfect for automating repetitive tasks like file management, web scraping, data processing, email workflows, and more.
+Perfect for automating repetitive tasks like data pipelines, file management, web scraping, email workflows, database operations, and much more.
 
 ### Use Cases
 
 - **Data Pipeline Automation**: Download, process, and distribute data reports
+- **Database Operations**: Query, insert, and manage data in SQLite databases
 - **File Organization**: Automate file sorting, renaming, and organization tasks
 - **Web Scraping**: Extract data from websites and APIs with automated workflows
 - **Email Automation**: Send personalized emails, newsletters, and notifications
@@ -22,16 +25,20 @@ Perfect for automating repetitive tasks like file management, web scraping, data
 - **Backup & Archival**: Automate file backups and archival processes
 - **API Integration**: Connect different services and automate data flow
 - **Content Management**: Automate content creation, processing, and distribution
+- **Data Analysis**: Process CSV/JSON data, calculate statistics, and generate insights
+- **System Administration**: Run commands, manage files, and send notifications
 
 ### Key Features
 
 - 🎬 **Video → Workflow**: Extract workflow steps from screen-capture videos using Gemini AI vision
-- 🧾 **Text → Workflow**: Process text-based workflow descriptions with `--from-text`
-- 🛠️ **Rich Tool Library**: File I/O, HTTP requests, email, data processing, web scraping, and more
+- 🌐 **Web Interface**: Modern, user-friendly web UI for creating and running workflows
+- 🛠️ **Rich Tool Library**: 20+ tools including databases, file operations, data processing, web scraping, and more
 - 🤖 **AI Code Generation**: Produces complete, runnable Python scripts with proper error handling
 - 📈 **Auto-Execution**: Generates and runs workflows immediately with detailed logging
 - 📁 **Organized Outputs**: All artifacts saved under `data/` directory structure
 - 🔧 **Extensible**: Easy to add custom tools and workflow patterns
+- 📊 **Advanced Data Processing**: CSV/JSON manipulation, database operations, data analysis
+- 🎯 **Smart Parsing**: Intelligent workflow step recognition and parameter extraction
 
 ## Installation
 
@@ -67,86 +74,81 @@ EOF
 
 ### Quick Start
 
-**From a screen-capture video:**
+**Web Interface:**
 ```bash
-python main.py data/workflow_videos/my_task.mp4
+# Production mode (no auto-reload)
+python3 main.py
+
+# Debug mode (auto-reload on file changes)
+python3 main.py --debug
+
+# Open browser to http://localhost:5000
 ```
 
-**From a text workflow:**
-```bash
-python main.py data/workflow_texts/my_workflow.txt --from-text
-```
+For detailed web interface documentation, see [WEB_UI_README.md](WEB_UI_README.md).
 
-**Generate without running (--no-run flag):**
-```bash
-# Generate the Python code but don't execute it
-python main.py data/workflow_texts/my_workflow.txt --from-text --no-run
 
-# Then run it manually later
-python data/generated_workflows/my_workflow.py
-```
+### Debug Flag Explanation
 
-### How It Works
+The `--debug` flag controls Flask's debug mode:
 
-1. **Video Processing** (default mode):
-   - Extracts representative frames from your video
-   - Uses Gemini AI to analyze the UI and infer workflow steps
-   - Saves the inferred workflow as text
-   - Generates executable Python code
-   - Runs the workflow immediately
+**Production Mode** (`python3 main.py`):
+- ✅ **Stable** - No auto-restarts
+- ✅ **Clean output** - No duplicate messages
+- ✅ **Performance** - Optimized for production use
+- ✅ **Reliable** - Consistent behavior
 
-2. **Text Processing** (`--from-text` mode):
-   - Reads your text-based workflow description
-   - Parses it into structured steps
-   - Generates executable Python code
-   - Runs the workflow immediately
+**Debug Mode** (`python3 main.py --debug`):
+- 🔄 **Auto-reload** - Automatically restarts when you change code
+- 🐛 **Development** - Perfect for making changes to the web interface
+- ⚠️ **Duplicate messages** - Normal Flask behavior (expected)
+- 🔧 **Debugging** - Enhanced error messages and debugging info
 
-### Example Workflows
+**When to use each:**
+- **Production mode**: For normal usage, demos, or when you don't need code changes
+- **Debug mode**: When developing, modifying the web interface, or debugging issues
 
-**File Management:**
-```bash
-# Create a video of you organizing files, then:
-python main.py data/workflow_videos/file_organization.mp4
-```
-
-**Web Scraping:**
-```bash
-# Create a text file describing your scraping workflow:
-echo "1. Download data from https://example.com/api/data
-2. Process the JSON response
-3. Save results to data/results.json
-4. Send email notification with summary" > data/workflow_texts/scrape_data.txt
-
-python main.py data/workflow_texts/scrape_data.txt --from-text
-```
-
-**Data Processing:**
-```bash
-# Create a video of your data analysis process, then:
-python main.py data/workflow_videos/data_analysis.mp4
-```
 
 
 
 ## Available Tools
 
-The system includes a comprehensive set of built-in tools for common automation tasks:
+The system includes 20+ built-in tools for comprehensive automation:
 
 ### File Operations
 - **`read_file`**: Read content from files with custom encoding
 - **`write_file`**: Write content to files (creates directories automatically)
 - **`list_files`**: List files in directories with optional pattern filtering
 - **`create_directory`**: Create directories and subdirectories
+- **`copy_file`**: Copy files from source to destination
+- **`move_file`**: Move files from source to destination
+- **`delete_file`**: Delete files safely
+
+### Data Processing
+- **`read_csv`**: Read and parse CSV files with custom delimiters
+- **`write_csv`**: Write data to CSV files with proper formatting
+- **`process_json`**: Extract, filter, and transform JSON data
+- **`analyze_data`**: Perform basic data analysis (sum, average, count, min, max)
+
+### Database Operations
+- **`sqlite_query`**: Execute SQL queries on SQLite databases
+- **`sqlite_insert`**: Insert data into SQLite database tables
 
 ### Web & Network
 - **`download`**: Download content from URLs with timeout handling
 - **`http_request`**: Make HTTP requests (GET, POST, PUT, etc.) with headers and data
+- **`scrape_webpage`**: Scrape content from web pages
 
 ### Communication
 - **`send_email`**: Send emails via SMTP with interactive setup prompts
+- **`send_notification`**: Send desktop notifications
 
-### Data Processing
-- **`process_data`**: Transform data (uppercase, lowercase, count, reverse, custom operations)
+### System Operations
+- **`run_command`**: Execute system commands with timeout handling
+
+### File Compression
+- **`compress_files`**: Create ZIP archives from multiple files
+- **`extract_archive`**: Extract files from ZIP archives
 
 ### Utilities
 - **`wait`**: Add delays between workflow steps
@@ -216,6 +218,24 @@ When writing text-based workflows, use simple numbered steps. The system will au
 5. Send email notification with the summary
 ```
 
+### Database Operations
+```
+1. Query users from database table "customers"
+2. Calculate total number of customers
+3. Insert new customer data into database
+4. Generate customer report
+5. Send notification "Database updated successfully"
+```
+
+### Advanced File Management
+```
+1. List all files in documents folder
+2. Compress important files to backup.zip
+3. Move backup.zip to backup folder
+4. Delete old temporary files
+5. Send notification "Backup completed"
+```
+
 ## Configuration
 
 ### Email Setup
@@ -232,10 +252,10 @@ export SMTP_PORT="587"
 ```
 
 **Gmail Configuration:**
-- SMTP server: `smtp.gmail.com`
-- Port `587` (STARTTLS, recommended) or `465` (SSL)
+  - SMTP server: `smtp.gmail.com`
+  - Port `587` (STARTTLS, recommended) or `465` (SSL)
 - Username: full email address (e.g., `name@gmail.com`)
-- Password: Gmail App Password (generate under Google Account → Security → App passwords)
+  - Password: Gmail App Password (generate under Google Account → Security → App passwords)
 
 ### Required vs Optional
 - **GEMINI_API_KEY**: Required for video analysis and code generation
@@ -243,25 +263,26 @@ export SMTP_PORT="587"
 
 ## How It Works
 
+### Web Interface
+1. **Interactive Creation**: Use the web UI to write workflows in natural language
+2. **Real-time Parsing**: See your workflow steps parsed and validated instantly
+3. **Tool Browser**: Explore available tools and their capabilities
+4. **One-click Generation**: Convert text to Python code with a single click
+5. **Live Execution**: Run workflows and see results in real-time
+
 ### Video Processing Pipeline
-1. **Frame Extraction**: Samples representative frames from your screen-capture video
-2. **AI Analysis**: Uses Gemini AI vision to analyze UI elements and infer workflow steps
-3. **Text Generation**: Converts visual analysis into structured text workflow
-4. **Code Generation**: Transforms workflow steps into executable Python code
+1. **Intelligent Frame Sampling**: Uses advanced algorithms to detect scene changes and important moments
+2. **Enhanced AI Analysis**: Uses Gemini AI vision with UI element detection and OCR capabilities
+3. **Smart Text Generation**: Converts visual analysis into structured text workflow
+4. **Advanced Code Generation**: Transforms workflow steps into executable Python code
 5. **Execution**: Runs the generated script with comprehensive logging
 
 ### Text Processing Pipeline
-1. **Text Parsing**: Analyzes your workflow description and extracts structured steps
-2. **Action Mapping**: Maps natural language to specific tool functions
-3. **Code Generation**: Creates executable Python code using the tool registry
+1. **Smart Text Parsing**: Analyzes your workflow description with enhanced pattern matching
+2. **Intelligent Action Mapping**: Maps natural language to specific tool functions with parameter extraction
+3. **Advanced Code Generation**: Creates executable Python code using the expanded tool registry
 4. **Execution**: Runs the generated script with error handling and logging
 
-### Generated Code Features
-- Complete Python scripts with proper imports and setup
-- Error handling with try-catch blocks
-- Comprehensive logging for debugging
-- Tool registry integration for all operations
-- Main function entry point for easy execution
 
 ## Troubleshooting
 
@@ -284,10 +305,27 @@ export SMTP_PORT="587"
 - Ensure your video file is in a supported format (MP4, AVI, MOV)
 - Check that OpenCV can read your video file
 
+**Web interface not loading**
+- Make sure Flask is installed: `pip install flask`
+- Check that port 5000 is available
+- Try accessing `http://localhost:5000` directly
+- Use `python3 main.py` to launch the web interface
+
+**Debug mode issues**
+- Use `python3 main.py --debug` for development (auto-reload)
+- Use `python3 main.py` for production (no auto-reload)
+- Debug mode may show duplicate startup messages (this is normal)
+
+**Database operations fail**
+- Ensure SQLite database files exist and are writable
+- Check file permissions for database operations
+- Verify table names and column structures
+
 ### Getting Help
 
 - Check the generated workflow text in `data/workflow_texts/` to see what the AI inferred
 - Review the generated Python code in `data/generated_workflows/` for debugging
+- Use the web interface for real-time error feedback
 - Enable verbose logging by modifying the logging level in the generated code
 
 ## Development
@@ -298,30 +336,60 @@ This project uses Python 3.8+ and follows standard Python packaging conventions.
 
 ```
 data/
-├── workflow_videos/       # Your screen‑capture videos (input)
-├── workflow_texts/        # Inferred (or manual) workflow text files
-├── generated_workflows/   # Generated Python scripts
-└── outputs/               # Other output files/artifacts
+├── workflow_videos/       # Demo video files (input)
+├── generated_workflows/   # Temporary generated Python scripts (auto-cleaned)
+└── temp_outputs/          # Workflow execution outputs (auto-cleaned)
 workflowmvp/
 ├── __init__.py            # Package metadata
-├── video_to_workflow.py   # Frame sampling + Gemini inference
-├── parser.py              # Convert inferred text → structured steps/actions
+├── video_to_workflow.py   # Enhanced frame sampling + AI inference with OCR
+├── parser.py              # Smart text parsing with 15+ action types
 ├── agent.py               # Generate Python code (Gemini); enforce main()
-└── tools.py               # Tool registry (download, read/write, email, wait, http, etc.)
-main.py                    # CLI (video by default; --from-text for text input)
-requirements.txt           # Dependencies
+└── tools.py               # Expanded tool registry (20+ tools)
+web/
+├── templates/
+│   └── index.html         # Web UI template
+└── static/                # Static assets (CSS, JS, images)
+    ├── css/
+    │   └── style.css      # Web interface styles
+    ├── js/
+    │   └── app.js         # Web interface JavaScript
+    └── images/            # Images and icons
+main.py                    # Web interface with Flask server
+cleanup.py                 # Cleanup script for temporary files
+requirements.txt           # Dependencies including Flask
 setup.py                   # Packaging metadata (optional)
+WEB_UI_README.md           # Web interface documentation
 ```
 
 ### File Explanations
 
-- **`main.py`**: One‑command interface. Pass a video; it infers, generates, and runs. Use `--from-text` to run a saved text workflow instead.
-- **`workflowmvp/video_to_workflow.py`**: Samples frames and asks Gemini to infer the step list.
-- **`workflowmvp/parser.py`**: Converts inferred text into structured steps/actions with parameters.
-- **`workflowmvp/agent.py`**: Generates the final Python script using the tool registry and enforces a `main()` entrypoint.
-- **`workflowmvp/tools.py`**: Central tool catalog (email, file I/O, HTTP, wait, etc.).
+- **`main.py`**: Complete web interface with Flask server, API endpoints, and debug flag support.
+- **`cleanup.py`**: Standalone cleanup script for temporary files. Can be run manually or scheduled.
+
+### File Management
+
+**Temporary Files:**
+- Generated workflow files are kept during runtime for re-execution
+- Workflow outputs are stored in `data/temp_outputs/` and cleaned up automatically
+- All temporary files are cleaned up when the web server shuts down
+
+**Manual Cleanup:**
+```bash
+# Clean up old files manually
+python3 cleanup.py
+
+# Or use the web API
+curl -X POST http://localhost:5000/api/cleanup
+```
+- **`web/templates/index.html`**: Web UI template with interactive workflow creation.
+- **`web/static/css/style.css`**: Web interface styles and layout.
+- **`web/static/js/app.js`**: Web interface JavaScript functionality.
+- **`workflowmvp/video_to_workflow.py`**: Enhanced frame sampling with scene detection, UI element recognition, and OCR capabilities.
+- **`workflowmvp/parser.py`**: Smart text parsing with 15+ action types and intelligent parameter extraction.
+- **`workflowmvp/agent.py`**: Generates the final Python script using the expanded tool registry and enforces a `main()` entrypoint.
+- **`workflowmvp/tools.py`**: Comprehensive tool catalog with 20+ tools including databases, data processing, and system operations.
 - **`data/`**: Your inputs (videos), inferred texts, generated scripts, and outputs.
-- **`requirements.txt` / `setup.py`**: Dependencies and optional packaging.
+- **`requirements.txt` / `setup.py`**: Dependencies including Flask for web interface.
 
 ### Adding Custom Tools
 

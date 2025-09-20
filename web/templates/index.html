@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WorkflowMVP - Web Interface</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 WorkflowMVP</h1>
+            <p>Create and run automated workflows with AI</p>
+        </div>
+
+        <div class="section">
+            <h3>📝 Create Workflow</h3>
+            
+            
+            <div style="margin-bottom: 15px;">
+                <label>Input Type:</label>
+                <div style="display: flex; gap: 10px;">
+                    <label style="display: flex; align-items: center; gap: 5px;">
+                        <input type="radio" name="inputType" value="text" checked onchange="toggleInputType()">
+                        Text Description
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 5px;">
+                        <input type="radio" name="inputType" value="video" onchange="toggleInputType()">
+                        Video Upload
+                    </label>
+                </div>
+            </div>
+            
+            <div id="textInput">
+                <textarea id="workflowText" placeholder="Enter your workflow steps here...&#10;&#10;Example:&#10;1. Download data from https://api.example.com/data&#10;2. Process the JSON response&#10;3. Send email notification with results"></textarea>
+            </div>
+            
+            <div id="videoInput" style="display: none;">
+                <input type="file" id="videoFile" accept="video/*">
+                <div id="videoPreview" style="display: none; margin-top: 10px;">
+                    <video id="previewVideo" controls></video>
+                </div>
+            </div>
+            
+            <br>
+            <button onclick="parseWorkflow()">Parse Workflow</button>
+        </div>
+
+        <div class="section">
+            <h3>📋 Parsed Steps</h3>
+            <div id="parsedSteps"></div>
+            <button id="generateBtn" onclick="generateWorkflow()" disabled>Generate Python Code</button>
+        </div>
+
+        <div class="section">
+            <h3>🛠️ Available Tools</h3>
+            <div id="tools" class="tools"></div>
+        </div>
+
+        <div class="section">
+            <h3>📚 Example Workflows</h3>
+            <div id="examples" class="examples"></div>
+        </div>
+
+        <div class="section">
+            <h3>🏃 Run Workflow</h3>
+            <div id="runResults"></div>
+            <button id="runBtn" onclick="runWorkflow()" disabled>Run Generated Workflow</button>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
