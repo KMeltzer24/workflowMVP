@@ -1,0 +1,86 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "workflowmvp"
+version = "0.2.0"
+description = "Turn screen-capture videos or text descriptions into executable Python workflows using Google's Gemini AI."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Kevin Meltzer", email = "kevinmeltzer1@gmail.com" }]
+keywords = ["workflow", "automation", "gemini", "ai", "flask"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Framework :: Flask",
+]
+dependencies = [
+    "google-generativeai>=0.3.0",
+    "requests>=2.28.0",
+    "python-dotenv>=1.0.0",
+    "opencv-python>=4.9.0.80",
+    "flask>=2.3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+    "ruff>=0.4",
+]
+
+[project.urls]
+Homepage = "https://github.com/KMeltzer24/workflowMVP"
+Issues = "https://github.com/KMeltzer24/workflowMVP/issues"
+
+[project.scripts]
+workflowmvp = "main:main"
+
+[tool.setuptools]
+packages = ["workflowmvp"]
+py-modules = ["main", "cleanup"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+extend-exclude = [
+    "data",
+    "workflow_videos",
+    "web/static",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # bugbear
+    "UP",  # pyupgrade
+    "W",   # pycodestyle warnings
+]
+ignore = [
+    "E501",   # line-too-long (long prompts/docstrings are fine)
+    "B008",   # default arg as function call (Flask patterns)
+    "UP006",  # typing.Dict -> dict[] (we still support py3.9)
+    "UP035",  # typing deprecated-imports (same reason as UP006)
+    "UP045",  # typing.Optional -> X | None (ditto)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B", "E402"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]

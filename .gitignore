@@ -138,3 +138,7 @@ dmypy.json
 # OS
 .DS_Store
 Thumbs.db
+
+# Runtime artifacts
+data/generated_workflows/*.py
+data/temp_outputs/*

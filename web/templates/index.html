@@ -3,71 +3,180 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WorkflowMVP - Web Interface</title>
+    <title>WorkflowMVP</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>🚀 WorkflowMVP</h1>
-            <p>Create and run automated workflows with AI</p>
+    <header class="topbar">
+        <div class="brand">
+            <span class="brand-mark">WF</span>
+            <div>
+                <h1>WorkflowMVP</h1>
+                <p class="subtitle">Natural language &amp; screen recordings &rarr; runnable Python workflows</p>
+            </div>
         </div>
+        <div class="topbar-actions">
+            <button class="ghost" id="settingsBtn" type="button">Settings</button>
+            <a class="ghost" href="https://github.com/KMeltzer24/workflowMVP" target="_blank" rel="noopener">GitHub</a>
+        </div>
+    </header>
 
-        <div class="section">
-            <h3>📝 Create Workflow</h3>
-            
-            
-            <div style="margin-bottom: 15px;">
-                <label>Input Type:</label>
-                <div style="display: flex; gap: 10px;">
-                    <label style="display: flex; align-items: center; gap: 5px;">
-                        <input type="radio" name="inputType" value="text" checked onchange="toggleInputType()">
-                        Text Description
-                    </label>
-                    <label style="display: flex; align-items: center; gap: 5px;">
-                        <input type="radio" name="inputType" value="video" onchange="toggleInputType()">
-                        Video Upload
-                    </label>
+    <nav class="tabs" role="tablist">
+        <button class="tab active" data-tab="create" role="tab">Create</button>
+        <button class="tab" data-tab="run" role="tab">Run</button>
+        <button class="tab" data-tab="examples" role="tab">Examples</button>
+        <button class="tab" data-tab="tools" role="tab">Tools</button>
+    </nav>
+
+    <main class="container">
+
+        <section class="tab-panel active" id="tab-create" role="tabpanel">
+            <div class="panel">
+                <div class="panel-header">
+                    <h2>Create workflow</h2>
+                    <div class="input-type">
+                        <label>
+                            <input type="radio" name="inputType" value="text" checked>
+                            Text description
+                        </label>
+                        <label>
+                            <input type="radio" name="inputType" value="video">
+                            Video upload
+                        </label>
+                    </div>
+                </div>
+
+                <div id="textInput">
+                    <textarea id="workflowText" spellcheck="false"
+                        placeholder="Enter your workflow steps&#10;&#10;Example:&#10;1. Download https://api.example.com/data&#10;2. Process the JSON response&#10;3. Send notification &quot;Done&quot;"></textarea>
+                </div>
+
+                <div id="videoInput" class="hidden">
+                    <input type="file" id="videoFile" accept="video/*">
+                    <div id="videoPreview" class="hidden">
+                        <video id="previewVideo" controls></video>
+                    </div>
+                </div>
+
+                <div class="actions">
+                    <button class="primary" id="parseBtn" type="button">Parse workflow</button>
+                    <button class="ghost" id="saveBtn" type="button">Save</button>
+                    <select id="savedList" class="select">
+                        <option value="">Load saved workflow...</option>
+                    </select>
+                    <button class="ghost" id="deleteSavedBtn" type="button">Delete</button>
                 </div>
             </div>
-            
-            <div id="textInput">
-                <textarea id="workflowText" placeholder="Enter your workflow steps here...&#10;&#10;Example:&#10;1. Download data from https://api.example.com/data&#10;2. Process the JSON response&#10;3. Send email notification with results"></textarea>
-            </div>
-            
-            <div id="videoInput" style="display: none;">
-                <input type="file" id="videoFile" accept="video/*">
-                <div id="videoPreview" style="display: none; margin-top: 10px;">
-                    <video id="previewVideo" controls></video>
+
+            <div class="panel" id="stepsPanel" hidden>
+                <div class="panel-header">
+                    <h2>Parsed steps</h2>
+                    <span class="pill" id="stepCountPill">0 steps</span>
+                </div>
+                <div id="parsedSteps"></div>
+                <div class="actions">
+                    <button class="primary" id="generateBtn" type="button" disabled>Generate Python code</button>
                 </div>
             </div>
-            
-            <br>
-            <button onclick="parseWorkflow()">Parse Workflow</button>
-        </div>
+        </section>
 
-        <div class="section">
-            <h3>📋 Parsed Steps</h3>
-            <div id="parsedSteps"></div>
-            <button id="generateBtn" onclick="generateWorkflow()" disabled>Generate Python Code</button>
-        </div>
+        <section class="tab-panel" id="tab-run" role="tabpanel">
+            <div class="panel">
+                <div class="panel-header">
+                    <h2>Run workflow</h2>
+                    <span id="runStatusPill" class="pill">idle</span>
+                </div>
+                <p class="muted" id="runMeta">Generate Python code from a parsed workflow to enable the run button.</p>
+                <div class="actions">
+                    <button class="primary" id="runBtn" type="button" disabled>Run generated workflow</button>
+                    <button class="ghost" id="clearLogsBtn" type="button">Clear logs</button>
+                </div>
+                <pre id="runOutput" class="terminal" aria-live="polite"></pre>
+            </div>
+        </section>
 
-        <div class="section">
-            <h3>🛠️ Available Tools</h3>
-            <div id="tools" class="tools"></div>
-        </div>
+        <section class="tab-panel" id="tab-examples" role="tabpanel">
+            <div class="panel">
+                <div class="panel-header">
+                    <h2>Examples</h2>
+                    <span class="pill">Click to load</span>
+                </div>
+                <div id="examples" class="cards"></div>
+            </div>
+        </section>
 
-        <div class="section">
-            <h3>📚 Example Workflows</h3>
-            <div id="examples" class="examples"></div>
-        </div>
+        <section class="tab-panel" id="tab-tools" role="tabpanel">
+            <div class="panel">
+                <div class="panel-header">
+                    <h2>Available tools</h2>
+                    <span id="toolCountPill" class="pill">0 tools</span>
+                </div>
+                <div id="tools" class="cards tool-cards"></div>
+            </div>
+        </section>
+    </main>
 
-        <div class="section">
-            <h3>🏃 Run Workflow</h3>
-            <div id="runResults"></div>
-            <button id="runBtn" onclick="runWorkflow()" disabled>Run Generated Workflow</button>
+    <!-- Settings modal -->
+    <div class="modal-backdrop hidden" id="settingsModal">
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+            <div class="modal-header">
+                <h2 id="settingsTitle">Credentials</h2>
+                <button class="icon-btn" id="closeSettingsBtn" type="button" aria-label="Close">x</button>
+            </div>
+            <p class="muted">
+                Stored only in your browser (sessionStorage) and sent per-request. Leave blank to use values from the server's <code>.env</code>.
+            </p>
+            <form id="settingsForm" class="form-grid" autocomplete="off">
+                <label>Gemini API key
+                    <input type="password" name="GEMINI_API_KEY" autocomplete="off">
+                </label>
+                <label>SMTP username
+                    <input type="text" name="EMAIL_USER" autocomplete="off">
+                </label>
+                <label>SMTP password / app password
+                    <input type="password" name="EMAIL_PASSWORD" autocomplete="off">
+                </label>
+                <label>From address
+                    <input type="text" name="EMAIL_FROM" autocomplete="off">
+                </label>
+                <label>SMTP server
+                    <input type="text" name="SMTP_SERVER" placeholder="smtp.gmail.com" autocomplete="off">
+                </label>
+                <label>SMTP port
+                    <input type="text" name="SMTP_PORT" placeholder="587" autocomplete="off">
+                </label>
+                <div class="form-actions">
+                    <button type="button" class="ghost" id="clearCredsBtn">Clear</button>
+                    <button type="submit" class="primary">Save</button>
+                </div>
+            </form>
         </div>
     </div>
+
+    <!-- Inline missing-cred prompt -->
+    <div class="modal-backdrop hidden" id="promptModal">
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="promptTitle">
+            <div class="modal-header">
+                <h2 id="promptTitle">Credentials required</h2>
+                <button class="icon-btn" id="closePromptBtn" type="button" aria-label="Close">x</button>
+            </div>
+            <p class="muted">This workflow needs credentials that aren't set. Provide them for this run.</p>
+            <form id="promptForm" class="form-grid" autocomplete="off">
+                <div id="promptFields"></div>
+                <label class="checkbox">
+                    <input type="checkbox" id="persistCredsCheckbox">
+                    Save to this browser session for future runs
+                </label>
+                <div class="form-actions">
+                    <button type="button" class="ghost" id="cancelPromptBtn">Cancel</button>
+                    <button type="submit" class="primary">Continue</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Toast stack -->
+    <div id="toasts" class="toasts" aria-live="polite"></div>
 
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 </body>

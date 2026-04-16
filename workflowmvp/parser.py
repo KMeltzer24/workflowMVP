@@ -3,8 +3,8 @@ Workflow Parser - Extracts structured steps from text descriptions
 """
 
 import re
-from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
 
 
 @dataclass
@@ -20,32 +20,50 @@ class WorkflowStep:
 
 class WorkflowParser:
     """Parses text descriptions into structured workflow steps"""
-    
+
     def __init__(self):
         pass
-    
+
+    REQUIRED_ACTION_PARAMS: Dict[str, List[str]] = {
+        "download": ["url"],
+        "read_file": ["file_path"],
+        "write_file": ["file_path"],
+        "read_csv": ["file_path"],
+        "write_csv": ["file_path"],
+        "send_email": ["recipient"],
+        "copy_file": ["source", "destination"],
+        "move_file": ["source", "destination"],
+        "delete_file": ["file_path"],
+        "run_command": ["command"],
+        "create_directory": ["directory"],
+        "sqlite_query": ["database_path"],
+        "sqlite_insert": ["database_path", "table"],
+        "compress_files": ["archive_path"],
+        "extract_archive": ["archive_path", "extract_to"],
+    }
+
     def parse_workflow(self, workflow_text: str) -> List[WorkflowStep]:
         """Parse workflow text into structured steps"""
         steps = []
         lines = workflow_text.strip().split('\n')
-        
+
         current_step = None
         step_counter = 1
-        
+
         for line in lines:
             line = line.strip()
             if not line:
                 continue
-                
+
             # Check if this is a new step
             if self._is_step_start(line):
                 if current_step:
                     steps.append(current_step)
-                
+
                 step_id = f"step_{step_counter}"
                 description = self._extract_description(line)
                 action, parameters = self._extract_action_and_params(description)
-                
+
                 current_step = WorkflowStep(
                     step_id=step_id,
                     description=description,
@@ -60,15 +78,58 @@ class WorkflowParser:
                 action, params = self._extract_action_and_params(current_step.description)
                 current_step.action = action
                 current_step.parameters.update(params)
-        
+
         if current_step:
             steps.append(current_step)
-        
+
         # Resolve dependencies
         self._resolve_dependencies(steps)
-        
+
         return steps
-    
+
+    def assess_parse_confidence(self, steps: List[WorkflowStep]) -> Dict[str, Any]:
+        """Score parser confidence and flag when AI assist should be considered."""
+        if not steps:
+            return {
+                "score": 0.0,
+                "custom_steps": 0,
+                "missing_param_steps": 0,
+                "reasons": ["No steps were parsed."],
+                "needs_ai_assist": True,
+            }
+
+        custom_steps = sum(1 for step in steps if step.action == "custom")
+        missing_param_steps = 0
+        missing_details: List[str] = []
+
+        for step in steps:
+            required = self.REQUIRED_ACTION_PARAMS.get(step.action, [])
+            missing = [key for key in required if not str(step.parameters.get(key, "")).strip()]
+            if missing:
+                missing_param_steps += 1
+                missing_details.append(
+                    f"{step.step_id} ({step.action}) missing: {', '.join(missing)}"
+                )
+
+        total = len(steps)
+        custom_ratio = custom_steps / total
+        missing_ratio = missing_param_steps / total
+        score = max(0.0, 1.0 - (0.6 * custom_ratio) - (0.4 * missing_ratio))
+
+        reasons: List[str] = []
+        if custom_steps:
+            reasons.append(f"{custom_steps}/{total} steps were classified as custom.")
+        if missing_details:
+            reasons.extend(missing_details[:5])
+
+        return {
+            "score": round(score, 3),
+            "custom_steps": custom_steps,
+            "missing_param_steps": missing_param_steps,
+            "reasons": reasons,
+            "needs_ai_assist": score < 0.55,
+        }
+
     def _is_step_start(self, line: str) -> bool:
         """Check if a line starts a new step"""
         patterns = [
@@ -78,7 +139,7 @@ class WorkflowParser:
             r'^\*\s+',
         ]
         return any(re.match(pattern, line) for pattern in patterns)
-    
+
     def _extract_description(self, line: str) -> str:
         """Extract the description from a step line"""
         # Remove step numbering
@@ -86,11 +147,11 @@ class WorkflowParser:
         line = re.sub(r'^Step\s+\d+:\s*', '', line)
         line = re.sub(r'^[-*]\s*', '', line)
         return line.strip()
-    
+
     def _extract_action_and_params(self, description: str) -> tuple[str, Dict[str, Any]]:
         """Extract action and parameters from description with enhanced pattern matching"""
         description_lower = description.lower()
-        
+
         # Enhanced action patterns with more specific matching
         if 'download' in description_lower or 'fetch' in description_lower:
             action = 'download'
@@ -159,9 +220,9 @@ class WorkflowParser:
         else:
             action = 'custom'
             params = {'description': description}
-        
+
         return action, params
-    
+
     def _extract_url_params(self, description: str) -> Dict[str, Any]:
         """Extract URL parameters from description"""
         url_match = re.search(r'https?://[^\s]+', description)
@@ -169,7 +230,7 @@ class WorkflowParser:
             'url': url_match.group() if url_match else '',
             'description': description
         }
-    
+
     def _extract_file_params(self, description: str) -> Dict[str, Any]:
         """Extract file parameters from description"""
         file_match = re.search(r'["\']([^"\']*\.[a-zA-Z0-9]+)["\']', description)
@@ -177,7 +238,7 @@ class WorkflowParser:
             'file_path': file_match.group(1) if file_match else '',
             'description': description
         }
-    
+
     def _extract_email_params(self, description: str) -> Dict[str, Any]:
         """Extract email parameters from description"""
         email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', description)
@@ -185,14 +246,14 @@ class WorkflowParser:
             'recipient': email_match.group() if email_match else '',
             'description': description
         }
-    
+
     def _extract_process_params(self, description: str) -> Dict[str, Any]:
         """Extract processing parameters from description"""
         return {
             'operation': description,
             'description': description
         }
-    
+
     def _extract_wait_params(self, description: str) -> Dict[str, Any]:
         """Extract wait parameters from description"""
         time_match = re.search(r'(\d+)\s*(second|minute|hour|day)s?', description.lower())
@@ -203,12 +264,12 @@ class WorkflowParser:
             seconds = value * multiplier.get(unit, 1)
         else:
             seconds = 5  # default
-        
+
         return {
             'seconds': seconds,
             'description': description
         }
-    
+
     def _extract_json_params(self, description: str) -> Dict[str, Any]:
         """Extract JSON processing parameters"""
         return {
@@ -216,7 +277,7 @@ class WorkflowParser:
             'path': self._extract_json_path(description),
             'description': description
         }
-    
+
     def _extract_json_path(self, description: str) -> str:
         """Extract JSONPath from description"""
         # Look for patterns like "extract price from data.bitcoin.usd"
@@ -224,7 +285,7 @@ class WorkflowParser:
         if path_match:
             return path_match.group(2)
         return ""
-    
+
     def _extract_file_operation_params(self, description: str) -> Dict[str, Any]:
         """Extract file operation parameters (copy, move)"""
         # Look for "from X to Y" pattern
@@ -236,7 +297,7 @@ class WorkflowParser:
                 'description': description
             }
         return {'description': description}
-    
+
     def _extract_command_params(self, description: str) -> Dict[str, Any]:
         """Extract command parameters"""
         # Look for command in quotes or after "run"
@@ -247,35 +308,35 @@ class WorkflowParser:
                 'description': description
             }
         return {'description': description}
-    
+
     def _extract_database_params(self, description: str) -> Dict[str, Any]:
         """Extract database parameters"""
         # Look for table name and database path
         table_match = re.search(r'table\s+["\']?(\w+)["\']?', description.lower())
         db_match = re.search(r'database\s+["\']?([^"\']+)["\']?', description.lower())
-        
+
         params = {'description': description}
         if table_match:
             params['table'] = table_match.group(1)
         if db_match:
             params['database_path'] = db_match.group(1)
-        
+
         return params
-    
+
     def _extract_compression_params(self, description: str) -> Dict[str, Any]:
         """Extract compression parameters"""
         # Look for file patterns and archive path
         files_match = re.findall(r'["\']([^"\']*\.[\w]+)["\']', description)
         archive_match = re.search(r'to\s+["\']?([^"\']+)["\']?', description)
-        
+
         params = {'description': description}
         if files_match:
             params['files'] = files_match
         if archive_match:
             params['archive_path'] = archive_match.group(1)
-        
+
         return params
-    
+
     def _extract_analysis_params(self, description: str) -> Dict[str, Any]:
         """Extract data analysis parameters"""
         # Look for analysis type
@@ -287,28 +348,28 @@ class WorkflowParser:
                     'description': description
                 }
         return {'operation': 'count', 'description': description}
-    
+
     def _extract_notification_params(self, description: str) -> Dict[str, Any]:
         """Extract notification parameters"""
         # Look for title and message
         title_match = re.search(r'title[:\s]+["\']?([^"\']+)["\']?', description.lower())
         message_match = re.search(r'message[:\s]+["\']?([^"\']+)["\']?', description.lower())
-        
+
         params = {'description': description}
         if title_match:
             params['title'] = title_match.group(1)
         if message_match:
             params['message'] = message_match.group(1)
-        
+
         return params
-    
+
     def _resolve_dependencies(self, steps: List[WorkflowStep]):
         """Resolve dependencies between steps with enhanced logic"""
         for i, step in enumerate(steps):
             # Enhanced dependency resolution
             if i > 0:
                 step.dependencies.append(steps[i-1].step_id)
-            
+
             # Look for explicit dependencies in the description
             if 'using' in step.description.lower() or 'from' in step.description.lower():
                 # Try to find which previous step this depends on

@@ -1,319 +1,727 @@
-// WorkflowMVP Web Interface JavaScript
+// WorkflowMVP — web client
+//
+// Highlights:
+//   - Tabs + toasts + Settings modal (creds kept in sessionStorage).
+//   - SSE-based live run streaming.
+//   - Save/load workflows in localStorage.
+//   - Inline "missing credentials" prompt before running a workflow that
+//     needs creds the session doesn't have.
 
-let currentWorkflowPath = null;
-let parsedSteps = [];
-let stepsEdited = false;
+const CREDS_KEY = "workflowmvp.credentials";
+const SAVED_WORKFLOWS_KEY = "workflowmvp.savedWorkflows";
+const CREDENTIAL_KEYS = [
+    "GEMINI_API_KEY",
+    "EMAIL_USER",
+    "EMAIL_PASSWORD",
+    "EMAIL_FROM",
+    "SMTP_SERVER",
+    "SMTP_PORT",
+];
 
-// Load tools on page load
-fetch('/api/tools')
-    .then(response => response.json())
-    .then(tools => {
-        const toolsDiv = document.getElementById('tools');
-        tools.forEach(tool => {
-            const toolDiv = document.createElement('div');
-            toolDiv.className = 'tool';
-            toolDiv.innerHTML = `
-                <strong>${tool.name}</strong><br>
-                <small>${tool.description}</small><br>
-                <small>Parameters: ${Object.keys(tool.parameters).join(', ')}</small>
-            `;
-            toolsDiv.appendChild(toolDiv);
-        });
+const state = {
+    parsedSteps: [],
+    currentWorkflowPath: null,
+    stepsEdited: false,
+    streaming: false,
+};
+
+// -------------------- Credentials --------------------
+
+function loadCreds() {
+    try {
+        const raw = sessionStorage.getItem(CREDS_KEY);
+        if (!raw) return {};
+        const parsed = JSON.parse(raw);
+        return typeof parsed === "object" && parsed ? parsed : {};
+    } catch (_) {
+        return {};
+    }
+}
+
+function saveCreds(creds) {
+    const filtered = {};
+    for (const key of CREDENTIAL_KEYS) {
+        if (creds[key]) filtered[key] = String(creds[key]).trim();
+    }
+    sessionStorage.setItem(CREDS_KEY, JSON.stringify(filtered));
+}
+
+function clearCreds() {
+    sessionStorage.removeItem(CREDS_KEY);
+}
+
+// -------------------- Saved workflows --------------------
+
+function loadSavedWorkflows() {
+    try {
+        const raw = localStorage.getItem(SAVED_WORKFLOWS_KEY);
+        if (!raw) return {};
+        const parsed = JSON.parse(raw);
+        return typeof parsed === "object" && parsed ? parsed : {};
+    } catch (_) {
+        return {};
+    }
+}
+
+function persistSavedWorkflows(all) {
+    localStorage.setItem(SAVED_WORKFLOWS_KEY, JSON.stringify(all));
+}
+
+function refreshSavedList() {
+    const select = document.getElementById("savedList");
+    if (!select) return;
+    const saved = loadSavedWorkflows();
+    const names = Object.keys(saved).sort();
+    select.innerHTML = '<option value="">Load saved workflow...</option>';
+    for (const name of names) {
+        const option = document.createElement("option");
+        option.value = name;
+        option.textContent = name;
+        select.appendChild(option);
+    }
+}
+
+// -------------------- Toasts --------------------
+
+function toast(message, variant = "info") {
+    const host = document.getElementById("toasts");
+    if (!host) return;
+    const node = document.createElement("div");
+    node.className = `toast ${variant}`;
+    node.textContent = message;
+    host.appendChild(node);
+    setTimeout(() => {
+        node.style.opacity = "0";
+        node.style.transition = "opacity 0.2s";
+        setTimeout(() => node.remove(), 220);
+    }, 3800);
+}
+
+// -------------------- Tabs --------------------
+
+function activateTab(name) {
+    document.querySelectorAll(".tab").forEach((btn) => {
+        btn.classList.toggle("active", btn.dataset.tab === name);
     });
+    document.querySelectorAll(".tab-panel").forEach((panel) => {
+        panel.classList.toggle("active", panel.id === `tab-${name}`);
+    });
+}
 
-// Load examples on page load
-fetch('/api/examples')
-    .then(response => response.json())
-    .then(examples => {
-        const examplesDiv = document.getElementById('examples');
-        examples.forEach(example => {
-            const exampleDiv = document.createElement('div');
-            exampleDiv.className = 'example';
-            exampleDiv.innerHTML = `
-                <h4>${example.name}</h4>
-                <p>${example.description}</p>
+document.querySelectorAll(".tab").forEach((btn) => {
+    btn.addEventListener("click", () => activateTab(btn.dataset.tab));
+});
+
+// -------------------- Initial data --------------------
+
+async function loadTools() {
+    try {
+        const response = await fetch("/api/tools");
+        const tools = await response.json();
+        const host = document.getElementById("tools");
+        host.innerHTML = "";
+        for (const tool of tools) {
+            const card = document.createElement("div");
+            card.className = "card";
+            card.innerHTML = `
+                <h3>${escapeHtml(tool.name)}</h3>
+                <p>${escapeHtml(tool.description || "")}</p>
+                <p class="muted" style="margin-top:8px"><code>${
+                    Object.keys(tool.parameters || {})
+                        .map(escapeHtml)
+                        .join(", ") || "(no parameters)"
+                }</code></p>
             `;
-            exampleDiv.onclick = () => {
-                document.getElementById('workflowText').value = example.workflow;
+            host.appendChild(card);
+        }
+        document.getElementById("toolCountPill").textContent = `${tools.length} tools`;
+    } catch (err) {
+        toast(`Could not load tools: ${err.message}`, "error");
+    }
+}
+
+async function loadExamples() {
+    try {
+        const response = await fetch("/api/examples");
+        const examples = await response.json();
+        const host = document.getElementById("examples");
+        host.innerHTML = "";
+        for (const example of examples) {
+            const card = document.createElement("div");
+            card.className = "card clickable";
+            const needs = Array.isArray(example.requires_credentials)
+                ? example.requires_credentials
+                : [];
+            card.innerHTML = `
+                <h3>${escapeHtml(example.name)}</h3>
+                <p>${escapeHtml(example.description || "")}</p>
+                ${
+                    needs.length
+                        ? `<span class="badge">Needs: ${needs
+                              .map(escapeHtml)
+                              .join(", ")}</span>`
+                        : ""
+                }
+            `;
+            card.addEventListener("click", () => {
+                document.getElementById("workflowText").value = example.workflow;
+                document.querySelector("input[name='inputType'][value='text']").checked = true;
+                toggleInputType();
+                activateTab("create");
                 parseWorkflow();
-            };
-            examplesDiv.appendChild(exampleDiv);
-        });
-    });
+            });
+            host.appendChild(card);
+        }
+    } catch (err) {
+        toast(`Could not load examples: ${err.message}`, "error");
+    }
+}
+
+// -------------------- Parse workflow --------------------
 
 function parseWorkflow() {
-    const inputType = document.querySelector('input[name="inputType"]:checked').value;
-    
-    if (inputType === 'text') {
-        const workflowText = document.getElementById('workflowText').value;
-        if (!workflowText.trim()) {
-            showError('Please enter a workflow description');
+    const inputType = document.querySelector("input[name='inputType']:checked").value;
+    if (inputType === "text") {
+        const text = document.getElementById("workflowText").value;
+        if (!text.trim()) {
+            toast("Enter a workflow description first", "warning");
             return;
         }
-        parseTextWorkflow(workflowText);
+        parseTextWorkflow(text);
     } else {
-        const videoFile = document.getElementById('videoFile').files[0];
+        const videoFile = document.getElementById("videoFile").files[0];
         if (!videoFile) {
-            showError('Please select a video file');
+            toast("Choose a video file first", "warning");
             return;
         }
         parseVideoWorkflow(videoFile);
     }
 }
 
-function parseTextWorkflow(workflowText) {
-    showLoading('Parsing workflow...');
-    
-    fetch('/api/parse-workflow', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({workflow_text: workflowText})
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            parsedSteps = data.steps;
-            stepsEdited = false;
-            displaySteps(data.steps);
-            const generateBtn = document.getElementById('generateBtn');
-            generateBtn.disabled = false;
-            generateBtn.textContent = 'Generate Python Code';
-            generateBtn.style.background = '#007bff';
-            showSuccess(`Parsed ${data.steps.length} workflow steps`);
-        } else {
-            showError('Failed to parse workflow: ' + data.error);
+async function parseTextWorkflow(text) {
+    toast("Parsing workflow...");
+    try {
+        const response = await fetch("/api/parse-workflow", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                workflow_text: text,
+                credentials: loadCreds(),
+            }),
+        });
+        const data = await response.json();
+        if (!data.success) {
+            toast(`Parse failed: ${data.error}`, "error");
+            return;
         }
-    })
-    .catch(error => {
-        showError('Error parsing workflow: ' + error.message);
-    });
+        state.parsedSteps = data.steps;
+        state.stepsEdited = false;
+        displaySteps(data.steps);
+        enableGenerate(true);
+        if (data.ai_assisted) {
+            toast(
+                `Parsed ${data.steps.length} steps (AI-assisted for low-confidence input)`,
+                "success"
+            );
+        } else {
+            toast(`Parsed ${data.steps.length} steps`, "success");
+        }
+    } catch (err) {
+        toast(`Parse error: ${err.message}`, "error");
+    }
 }
 
-function parseVideoWorkflow(videoFile) {
-    showLoading('Processing video...');
-    
-    const formData = new FormData();
-    formData.append('video', videoFile);
-    
-    fetch('/api/parse-video', {
-        method: 'POST',
-        body: formData
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            parsedSteps = data.steps;
-            stepsEdited = false;
-            displaySteps(data.steps);
-            const generateBtn = document.getElementById('generateBtn');
-            generateBtn.disabled = false;
-            generateBtn.textContent = 'Generate Python Code';
-            generateBtn.style.background = '#007bff';
-            showSuccess(`Parsed ${data.steps.length} workflow steps from video`);
-        } else {
-            showError('Failed to parse video: ' + data.error);
+async function parseVideoWorkflow(videoFile) {
+    toast("Processing video (this can take a moment)...");
+    try {
+        const formData = new FormData();
+        formData.append("video", videoFile);
+        formData.append("credentials", JSON.stringify(loadCreds()));
+
+        const response = await fetch("/api/parse-video", {
+            method: "POST",
+            body: formData,
+        });
+        const data = await response.json();
+        if (!data.success) {
+            if (
+                Array.isArray(data.missing_requirements) &&
+                data.missing_requirements.includes("GEMINI_API_KEY")
+            ) {
+                toast(
+                    "Gemini API key required. Open Settings to add one.",
+                    "warning"
+                );
+                openSettings();
+                return;
+            }
+            toast(`Video parse failed: ${data.error}`, "error");
+            return;
         }
-    })
-    .catch(error => {
-        showError('Error processing video: ' + error.message);
-    });
+        state.parsedSteps = data.steps;
+        state.stepsEdited = false;
+        displaySteps(data.steps);
+        enableGenerate(true);
+        toast(`Parsed ${data.steps.length} steps from video`, "success");
+    } catch (err) {
+        toast(`Video parse error: ${err.message}`, "error");
+    }
+}
+
+function enableGenerate(enabled) {
+    const btn = document.getElementById("generateBtn");
+    btn.disabled = !enabled;
+    btn.textContent = "Generate Python code";
 }
 
 function displaySteps(steps) {
-    const stepsDiv = document.getElementById('parsedSteps');
-    stepsDiv.innerHTML = '';
-    
+    const host = document.getElementById("parsedSteps");
+    host.innerHTML = "";
     steps.forEach((step, index) => {
-        const stepDiv = document.createElement('div');
-        stepDiv.className = 'step editable-step';
-        stepDiv.innerHTML = `
+        const div = document.createElement("div");
+        div.className = "step";
+        div.innerHTML = `
             <div class="step-header">
-                <strong>Step ${index + 1}:</strong>
-                <button class="edit-btn" onclick="toggleEdit(${index})">✏️ Edit</button>
+                <strong>Step ${index + 1}</strong>
+                <button class="edit-btn" data-index="${index}" type="button">Edit</button>
             </div>
-            <div class="step-content">
-                <div class="step-display" id="step-display-${index}">
-                    <div class="step-description">${step.description}</div>
-                    <small>Action: ${step.action} | Dependencies: ${step.dependencies.join(', ') || 'None'}</small>
-                </div>
-                <div class="step-edit" id="step-edit-${index}" style="display: none;">
-                    <textarea class="edit-description" id="edit-desc-${index}" placeholder="Edit step description...">${step.description}</textarea>
-                    <div class="edit-actions">
-                        <button class="save-btn" onclick="saveStep(${index})">💾 Save</button>
-                        <button class="cancel-btn" onclick="cancelEdit(${index})">❌ Cancel</button>
-                    </div>
+            <div id="step-display-${index}">
+                <div class="step-description">${escapeHtml(step.description)}</div>
+                <div class="step-meta">Action: ${escapeHtml(step.action)} &middot; Depends on: ${
+            step.dependencies.length ? escapeHtml(step.dependencies.join(", ")) : "none"
+        }</div>
+            </div>
+            <div id="step-edit-${index}" class="hidden">
+                <textarea class="edit-description" id="edit-desc-${index}">${escapeHtml(
+            step.description
+        )}</textarea>
+                <div class="edit-actions">
+                    <button class="save-btn" data-save="${index}" type="button">Save</button>
+                    <button class="cancel-btn" data-cancel="${index}" type="button">Cancel</button>
                 </div>
             </div>
         `;
-        stepsDiv.appendChild(stepDiv);
+        host.appendChild(div);
     });
+    document.getElementById("stepsPanel").hidden = false;
+    document.getElementById("stepCountPill").textContent = `${steps.length} steps`;
 }
 
-function toggleEdit(stepIndex) {
-    const displayDiv = document.getElementById(`step-display-${stepIndex}`);
-    const editDiv = document.getElementById(`step-edit-${stepIndex}`);
-    
-    if (displayDiv.style.display === 'none') {
-        // Switch to display mode
-        displayDiv.style.display = 'block';
-        editDiv.style.display = 'none';
-    } else {
-        // Switch to edit mode
-        displayDiv.style.display = 'none';
-        editDiv.style.display = 'block';
-        // Focus on the textarea
-        document.getElementById(`edit-desc-${stepIndex}`).focus();
+document.addEventListener("click", (event) => {
+    const edit = event.target.closest(".edit-btn");
+    const save = event.target.closest(".save-btn");
+    const cancel = event.target.closest(".cancel-btn");
+    if (edit) toggleEdit(+edit.dataset.index);
+    if (save) saveStep(+save.dataset.save);
+    if (cancel) cancelEdit(+cancel.dataset.cancel);
+});
+
+function toggleEdit(index) {
+    const display = document.getElementById(`step-display-${index}`);
+    const edit = document.getElementById(`step-edit-${index}`);
+    if (!display || !edit) return;
+    display.classList.toggle("hidden");
+    edit.classList.toggle("hidden");
+    if (!edit.classList.contains("hidden")) {
+        document.getElementById(`edit-desc-${index}`).focus();
     }
 }
 
-function saveStep(stepIndex) {
-    const newDescription = document.getElementById(`edit-desc-${stepIndex}`).value.trim();
-    if (!newDescription) {
-        showError('Step description cannot be empty');
+function saveStep(index) {
+    const value = document.getElementById(`edit-desc-${index}`).value.trim();
+    if (!value) {
+        toast("Description cannot be empty", "warning");
         return;
     }
-    
-    // Update the parsed steps array
-    parsedSteps[stepIndex].description = newDescription;
-    stepsEdited = true;
-    
-    // Update the display
-    const descriptionDiv = document.querySelector(`#step-display-${stepIndex} .step-description`);
-    descriptionDiv.textContent = newDescription;
-    
-    // Switch back to display mode
-    toggleEdit(stepIndex);
-    
-    showSuccess(`Step ${stepIndex + 1} updated successfully`);
-    
-    // Update generate button to show edits were made
-    const generateBtn = document.getElementById('generateBtn');
-    if (stepsEdited) {
-        generateBtn.textContent = 'Generate Python Code (Modified)';
-        generateBtn.style.background = '#ffc107';
-    }
+    state.parsedSteps[index].description = value;
+    state.stepsEdited = true;
+    const row = document.querySelector(`#step-display-${index} .step-description`);
+    row.textContent = value;
+    toggleEdit(index);
+    const generateBtn = document.getElementById("generateBtn");
+    generateBtn.textContent = "Generate Python code (modified)";
+    toast(`Updated step ${index + 1}`, "success");
 }
 
-function cancelEdit(stepIndex) {
-    // Reset the textarea to original value
-    document.getElementById(`edit-desc-${stepIndex}`).value = parsedSteps[stepIndex].description;
-    
-    // Switch back to display mode
-    toggleEdit(stepIndex);
+function cancelEdit(index) {
+    document.getElementById(`edit-desc-${index}`).value =
+        state.parsedSteps[index].description;
+    toggleEdit(index);
 }
 
-function generateWorkflow() {
-    if (parsedSteps.length === 0) {
-        showError('No parsed steps to generate from');
+// -------------------- Generate --------------------
+
+async function generateWorkflow() {
+    if (!state.parsedSteps.length) {
+        toast("Parse a workflow first", "warning");
         return;
     }
+    toast("Generating Python code...");
+    try {
+        const response = await fetch("/api/generate-workflow", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                steps: state.parsedSteps,
+                name: `workflow_${Date.now()}`,
+                credentials: loadCreds(),
+            }),
+        });
+        const data = await response.json();
+        if (!data.success) {
+            if (
+                Array.isArray(data.missing_requirements) &&
+                data.missing_requirements.includes("GEMINI_API_KEY")
+            ) {
+                toast("Gemini API key required — open Settings", "warning");
+                openSettings();
+                return;
+            }
+            toast(`Generation failed: ${data.error}`, "error");
+            return;
+        }
+        state.currentWorkflowPath = data.output_path;
+        document.getElementById("runBtn").disabled = false;
+        document.getElementById("runMeta").textContent = `Ready to run: ${data.output_path}`;
+        toast("Python code generated", "success");
+        activateTab("run");
+    } catch (err) {
+        toast(`Generate error: ${err.message}`, "error");
+    }
+}
 
-    // Auto-generate workflow name based on timestamp
-    const workflowName = `workflow_${Date.now()}`;
+// -------------------- Run (SSE) --------------------
 
+async function runWorkflow() {
+    if (!state.currentWorkflowPath) {
+        toast("Generate a workflow first", "warning");
+        return;
+    }
+    if (state.streaming) return;
 
-    showLoading('Generating Python code...');
-    
-    fetch('/api/generate-workflow', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+    const creds = loadCreds();
+    const missing = await checkRequirements(state.parsedSteps, creds);
+    if (missing.length) {
+        openPrompt(missing, (promptCreds, persist) => {
+            const merged = { ...creds, ...promptCreds };
+            if (persist) saveCreds(merged);
+            startStream(merged);
+        });
+        return;
+    }
+    startStream(creds);
+}
+
+async function checkRequirements(steps, creds) {
+    try {
+        const response = await fetch("/api/check-requirements", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ steps, credentials: creds }),
+        });
+        const data = await response.json();
+        if (!data.success) return [];
+        return Array.isArray(data.missing) ? data.missing : [];
+    } catch (_) {
+        return [];
+    }
+}
+
+function startStream(creds) {
+    const out = document.getElementById("runOutput");
+    out.innerHTML = "";
+    const statusPill = document.getElementById("runStatusPill");
+    statusPill.textContent = "running";
+    statusPill.className = "pill running";
+    state.streaming = true;
+    document.getElementById("runBtn").disabled = true;
+
+    // Use fetch + ReadableStream so we can POST the body (EventSource is GET-only).
+    fetch("/api/run-workflow/stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-            steps: parsedSteps,
-            name: workflowName
+            workflow_path: state.currentWorkflowPath,
+            credentials: creds,
+        }),
+    })
+        .then((response) => {
+            if (!response.ok || !response.body) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            return consumeSSE(response.body, out, statusPill);
         })
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            currentWorkflowPath = data.output_path;
-            document.getElementById('runBtn').disabled = false;
-            showSuccess('Python code generated successfully!');
-        } else {
-            showError('Failed to generate code: ' + data.error);
-        }
-    })
-    .catch(error => {
-        showError('Error generating code: ' + error.message);
-    });
+        .catch((err) => {
+            appendLine(out, `stream error: ${err.message}`, "err");
+            statusPill.textContent = "error";
+            statusPill.className = "pill error";
+        })
+        .finally(() => {
+            state.streaming = false;
+            document.getElementById("runBtn").disabled = false;
+        });
 }
 
-function runWorkflow() {
-    if (!currentWorkflowPath) {
-        showError('No workflow to run');
+async function consumeSSE(stream, out, statusPill) {
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let idx;
+        while ((idx = buffer.indexOf("\n\n")) !== -1) {
+            const chunk = buffer.slice(0, idx);
+            buffer = buffer.slice(idx + 2);
+            handleSSEChunk(chunk, out, statusPill);
+        }
+    }
+}
+
+function handleSSEChunk(chunk, out, statusPill) {
+    let event = "message";
+    let data = "";
+    for (const rawLine of chunk.split("\n")) {
+        if (rawLine.startsWith("event:")) {
+            event = rawLine.slice(6).trim();
+        } else if (rawLine.startsWith("data:")) {
+            data += rawLine.slice(5).trim();
+        }
+    }
+    if (!data) return;
+    let payload;
+    try {
+        payload = JSON.parse(data);
+    } catch (_) {
         return;
     }
-
-    showLoading('Running workflow...');
-    
-    fetch('/api/run-workflow', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({workflow_path: currentWorkflowPath})
-    })
-    .then(response => response.json())
-    .then(data => {
-        const resultsDiv = document.getElementById('runResults');
-        if (data.success) {
-            resultsDiv.innerHTML = `
-                <div class="success">✅ Workflow completed successfully!</div>
-                <pre>${data.stdout}</pre>
-            `;
-        } else {
-            resultsDiv.innerHTML = `
-                <div class="error">❌ Workflow failed!</div>
-                <pre>${data.stderr || data.error}</pre>
-            `;
-        }
-    })
-    .catch(error => {
-        showError('Error running workflow: ' + error.message);
-    });
+    switch (event) {
+        case "status":
+            appendLine(out, `[${payload.message}] run_id=${payload.run_id}`, "info");
+            break;
+        case "log":
+            appendLine(out, payload.line || "");
+            break;
+        case "done":
+            if (payload.success) {
+                appendLine(out, `workflow completed (exit ${payload.returncode})`, "info");
+                statusPill.textContent = "success";
+                statusPill.className = "pill success";
+                toast("Workflow completed", "success");
+            } else {
+                appendLine(
+                    out,
+                    `workflow failed (exit ${payload.returncode})`,
+                    "err"
+                );
+                statusPill.textContent = "error";
+                statusPill.className = "pill error";
+                toast("Workflow failed", "error");
+            }
+            break;
+        case "error":
+            appendLine(out, payload.message || "error", "err");
+            statusPill.textContent = "error";
+            statusPill.className = "pill error";
+            toast(`Run error: ${payload.message}`, "error");
+            break;
+    }
 }
 
-function showError(message) {
-    const resultsDiv = document.getElementById('runResults');
-    resultsDiv.innerHTML = `<div class="error">${message}</div>`;
+function appendLine(host, text, kind = "ok") {
+    const span = document.createElement("span");
+    span.className = `line-${kind}`;
+    span.textContent = text + "\n";
+    host.appendChild(span);
+    host.scrollTop = host.scrollHeight;
 }
 
-function showSuccess(message) {
-    const resultsDiv = document.getElementById('runResults');
-    resultsDiv.innerHTML = `<div class="success">${message}</div>`;
+// -------------------- Settings modal --------------------
+
+function openSettings() {
+    const modal = document.getElementById("settingsModal");
+    const form = document.getElementById("settingsForm");
+    const creds = loadCreds();
+    for (const key of CREDENTIAL_KEYS) {
+        const input = form.elements.namedItem(key);
+        if (input) input.value = creds[key] || "";
+    }
+    modal.classList.remove("hidden");
 }
 
-function showLoading(message) {
-    const resultsDiv = document.getElementById('runResults');
-    resultsDiv.innerHTML = `<div class="loading">${message}</div>`;
+function closeSettings() {
+    document.getElementById("settingsModal").classList.add("hidden");
 }
+
+document.getElementById("settingsBtn").addEventListener("click", openSettings);
+document.getElementById("closeSettingsBtn").addEventListener("click", closeSettings);
+document.getElementById("clearCredsBtn").addEventListener("click", () => {
+    clearCreds();
+    document.getElementById("settingsForm").reset();
+    toast("Credentials cleared", "success");
+});
+document.getElementById("settingsForm").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const values = {};
+    for (const key of CREDENTIAL_KEYS) {
+        const input = form.elements.namedItem(key);
+        if (input) values[key] = input.value;
+    }
+    saveCreds(values);
+    closeSettings();
+    toast("Credentials saved in this browser session", "success");
+});
+
+// -------------------- Inline creds prompt --------------------
+
+let promptResolve = null;
+
+function openPrompt(missingKeys, onSubmit) {
+    const modal = document.getElementById("promptModal");
+    const fields = document.getElementById("promptFields");
+    fields.innerHTML = "";
+    for (const key of missingKeys) {
+        const label = document.createElement("label");
+        const isSecret = key.includes("PASSWORD") || key.includes("KEY");
+        label.innerHTML = `${escapeHtml(key)}
+            <input type="${isSecret ? "password" : "text"}" name="${escapeHtml(
+            key
+        )}" required>`;
+        fields.appendChild(label);
+    }
+    promptResolve = onSubmit;
+    modal.classList.remove("hidden");
+    const first = fields.querySelector("input");
+    if (first) first.focus();
+}
+
+function closePrompt() {
+    document.getElementById("promptModal").classList.add("hidden");
+    promptResolve = null;
+}
+
+document.getElementById("closePromptBtn").addEventListener("click", closePrompt);
+document.getElementById("cancelPromptBtn").addEventListener("click", closePrompt);
+document.getElementById("promptForm").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const creds = {};
+    for (const input of form.querySelectorAll("input[type='text'], input[type='password']")) {
+        if (input.name) creds[input.name] = input.value;
+    }
+    const persist = document.getElementById("persistCredsCheckbox").checked;
+    const cb = promptResolve;
+    closePrompt();
+    if (cb) cb(creds, persist);
+});
+
+// -------------------- Save/Load workflows --------------------
+
+document.getElementById("saveBtn").addEventListener("click", () => {
+    const text = document.getElementById("workflowText").value.trim();
+    if (!text) {
+        toast("Nothing to save", "warning");
+        return;
+    }
+    const name = prompt("Save as:");
+    if (!name) return;
+    const all = loadSavedWorkflows();
+    all[name] = { text, savedAt: new Date().toISOString() };
+    persistSavedWorkflows(all);
+    refreshSavedList();
+    toast(`Saved "${name}"`, "success");
+});
+
+document.getElementById("savedList").addEventListener("change", (event) => {
+    const name = event.target.value;
+    if (!name) return;
+    const all = loadSavedWorkflows();
+    const item = all[name];
+    if (!item) return;
+    document.getElementById("workflowText").value = item.text;
+    toast(`Loaded "${name}"`, "success");
+});
+
+document.getElementById("deleteSavedBtn").addEventListener("click", () => {
+    const select = document.getElementById("savedList");
+    const name = select.value;
+    if (!name) {
+        toast("Pick a saved workflow first", "warning");
+        return;
+    }
+    const all = loadSavedWorkflows();
+    delete all[name];
+    persistSavedWorkflows(all);
+    refreshSavedList();
+    toast(`Deleted "${name}"`, "success");
+});
+
+// -------------------- Misc wiring --------------------
+
+document.getElementById("parseBtn").addEventListener("click", parseWorkflow);
+document.getElementById("generateBtn").addEventListener("click", generateWorkflow);
+document.getElementById("runBtn").addEventListener("click", runWorkflow);
+document.getElementById("clearLogsBtn").addEventListener("click", () => {
+    document.getElementById("runOutput").innerHTML = "";
+});
+document
+    .querySelectorAll("input[name='inputType']")
+    .forEach((radio) => radio.addEventListener("change", toggleInputType));
 
 function toggleInputType() {
-    const textInput = document.getElementById('textInput');
-    const videoInput = document.getElementById('videoInput');
-    const inputType = document.querySelector('input[name="inputType"]:checked').value;
-    
-    if (inputType === 'text') {
-        textInput.style.display = 'block';
-        videoInput.style.display = 'none';
-    } else {
-        textInput.style.display = 'none';
-        videoInput.style.display = 'block';
-    }
+    const inputType = document.querySelector("input[name='inputType']:checked").value;
+    document.getElementById("textInput").classList.toggle("hidden", inputType !== "text");
+    document
+        .getElementById("videoInput")
+        .classList.toggle("hidden", inputType !== "video");
 }
 
-function handleVideoUpload() {
-    const videoFile = document.getElementById('videoFile').files[0];
-    const videoPreview = document.getElementById('videoPreview');
-    const previewVideo = document.getElementById('previewVideo');
-    
+document.getElementById("videoFile").addEventListener("change", () => {
+    const videoFile = document.getElementById("videoFile").files[0];
+    const preview = document.getElementById("videoPreview");
+    const video = document.getElementById("previewVideo");
     if (videoFile) {
-        const url = URL.createObjectURL(videoFile);
-        previewVideo.src = url;
-        videoPreview.style.display = 'block';
+        video.src = URL.createObjectURL(videoFile);
+        preview.classList.remove("hidden");
     } else {
-        videoPreview.style.display = 'none';
+        preview.classList.add("hidden");
     }
+});
+
+// Close modals when clicking backdrop
+document.querySelectorAll(".modal-backdrop").forEach((backdrop) => {
+    backdrop.addEventListener("click", (event) => {
+        if (event.target === backdrop) {
+            backdrop.classList.add("hidden");
+        }
+    });
+});
+
+// Escape key closes modals
+document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+        document.querySelectorAll(".modal-backdrop").forEach((b) =>
+            b.classList.add("hidden")
+        );
+    }
+});
+
+// -------------------- Helpers --------------------
+
+function escapeHtml(value) {
+    return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
 }
 
-// Add event listener for video file input
-document.addEventListener('DOMContentLoaded', function() {
-    document.getElementById('videoFile').addEventListener('change', handleVideoUpload);
-});
+// -------------------- Boot --------------------
+
+loadTools();
+loadExamples();
+refreshSavedList();

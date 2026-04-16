@@ -1,345 +1,665 @@
 """
-WorkflowMVP - A Python project with a Web interface that uses an AI-powered workflow creation process
+WorkflowMVP - Flask web interface for AI-powered workflow creation.
+
+Handles:
+    - Parsing workflow text (and optionally screen-capture video) into structured steps.
+    - Generating executable Python scripts via Gemini.
+    - Running those scripts in a sandboxed per-run output directory with credentials
+      injected via environment variables (never written to disk).
+    - Streaming live stdout/stderr back to the browser over Server-Sent Events.
+    - Cleaning up generated files and outputs on server shutdown.
 """
 
-import os
-import sys
-import json
-import subprocess
-import tempfile
-import signal
+from __future__ import annotations
+
 import argparse
+import json
+import logging
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+import uuid
+import warnings
+from collections.abc import Iterable
+from typing import Any, Dict, List, Optional
 
-# Suppress gRPC and ALTS warnings
-os.environ['GRPC_VERBOSITY'] = 'ERROR'
-os.environ['GRPC_TRACE'] = ''
-os.environ['GLOG_minloglevel'] = '2'
-from flask import Flask, render_template, request, jsonify  
-from workflowmvp.tools import ToolRegistry
-from workflowmvp.parser import WorkflowParser
-from workflowmvp.agent import WorkflowAgent
-from dotenv import load_dotenv  
+# Suppress noisy gRPC / ALTS warnings emitted by google-generativeai on import.
+os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
+os.environ.setdefault("GRPC_TRACE", "")
+os.environ.setdefault("GLOG_minloglevel", "2")
 
-# Load environment variables from .env file
+# Silence the verbose FutureWarnings from google-* libraries on Python 3.9.
+# Re-enable with `python3 -W default main.py` if you want to see them.
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings(
+    "ignore",
+    message=r"urllib3 v2 only supports OpenSSL 1\.1\.1\+.*LibreSSL.*",
+)
+
+from dotenv import load_dotenv  # noqa: E402
+from flask import (  # noqa: E402
+    Flask,
+    Response,
+    jsonify,
+    render_template,
+    request,
+    stream_with_context,
+)
+
+from workflowmvp.agent import WorkflowAgent  # noqa: E402
+from workflowmvp.parser import WorkflowParser, WorkflowStep  # noqa: E402
+from workflowmvp.tools import ToolRegistry  # noqa: E402
+
 load_dotenv()
 
-# Create Flask app
-app = Flask(__name__, template_folder='web/templates', static_folder='web/static')
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+GENERATED_DIR = os.path.join(PROJECT_ROOT, "data", "generated_workflows")
+TEMP_OUTPUTS_DIR = os.path.join(PROJECT_ROOT, "data", "temp_outputs")
 
-def cleanup_on_exit():
-    """Clean up temporary files when server shuts down"""
-    # Check if we're in debug mode
-    debug_mode = '--debug' in sys.argv
-    
+# Mapping of workflow actions -> env var keys they require. Used by
+# /api/check-requirements to tell the UI which creds are missing before a run.
+ACTION_REQUIREMENTS: Dict[str, List[str]] = {
+    "send_email": [
+        "EMAIL_USER",
+        "EMAIL_PASSWORD",
+        "EMAIL_FROM",
+    ],
+}
+
+# Allow-list of credential keys the web layer will inject into subprocess env.
+ALLOWED_CRED_KEYS = {
+    "GEMINI_API_KEY",
+    "EMAIL_USER",
+    "EMAIL_PASSWORD",
+    "EMAIL_FROM",
+    "SMTP_SERVER",
+    "SMTP_PORT",
+}
+
+app = Flask(__name__, template_folder="web/templates", static_folder="web/static")
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _is_debug() -> bool:
+    return "--debug" in sys.argv
+
+
+def _sanitize_credentials(raw: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    """Keep only allow-listed credential keys with non-empty string values."""
+    if not raw or not isinstance(raw, dict):
+        return {}
+    out: Dict[str, str] = {}
+    for key, value in raw.items():
+        if key not in ALLOWED_CRED_KEYS:
+            continue
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            out[key] = text
+    return out
+
+
+def _resolve_api_key(creds: Dict[str, str]) -> Optional[str]:
+    """Per-request Gemini key beats .env."""
+    return creds.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
+
+
+def _build_run_env(creds: Dict[str, str]) -> Dict[str, str]:
+    """Build a subprocess env: parent env + PYTHONPATH + request creds."""
+    env = os.environ.copy()
+    existing_path = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (
+        PROJECT_ROOT + (os.pathsep + existing_path if existing_path else "")
+    )
+    env.update(creds)
+    return env
+
+
+def _ensure_run_dir(run_id: str) -> str:
+    run_dir = os.path.join(TEMP_OUTPUTS_DIR, run_id)
+    os.makedirs(run_dir, exist_ok=True)
+    return run_dir
+
+
+def _missing_requirements(
+    steps: Iterable[Dict[str, Any]], creds: Dict[str, str]
+) -> List[str]:
+    """Return env var keys that a run will need but which are not yet provided."""
+    effective = {**os.environ, **creds}
+    needed: set[str] = set()
+    for step in steps:
+        action = step.get("action") if isinstance(step, dict) else None
+        for key in ACTION_REQUIREMENTS.get(action or "", []):
+            needed.add(key)
+    return sorted(key for key in needed if not effective.get(key))
+
+
+def _examples() -> List[Dict[str, str]]:
+    """Self-contained example workflows that run end-to-end inside data/temp_outputs.
+
+    Each example seeds any inputs it needs so it can run offline without prior
+    state. Outputs land in the current working dir, which main.py sets to the
+    per-run subdir of data/temp_outputs and keeps until server shutdown cleanup.
+    """
+    return [
+        {
+            "name": "Bitcoin Price Snapshot",
+            "description": "Download the current Bitcoin price, save it to a file, and send a desktop notification.",
+            "workflow": (
+                "1. Download https://api.coinbase.com/v2/prices/BTC-USD/spot\n"
+                "2. Process the JSON response to extract the USD price\n"
+                "3. Write the extracted price to file \"bitcoin_price.txt\"\n"
+                "4. Send notification with title \"Bitcoin\" and message \"Price saved\""
+            ),
+            "requires_credentials": [],
+        },
+        {
+            "name": "CSV Data Processing Pipeline",
+            "description": "Seed a sample users.csv, read it, compute simple stats, and write a report.",
+            "workflow": (
+                "1. Write the text \"name,age\\nAlice,30\\nBob,25\\nCarol,41\\nDan,29\" to file \"users.csv\"\n"
+                "2. Read the CSV file \"users.csv\"\n"
+                "3. Calculate the average age of users\n"
+                "4. Write a summary to file \"report.txt\"\n"
+                "5. Send notification with title \"Pipeline\" and message \"Report generated\""
+            ),
+            "requires_credentials": [],
+        },
+        {
+            "name": "File Backup",
+            "description": "Create a few sample files and compress them into a zip archive.",
+            "workflow": (
+                "1. Create a directory called \"sandbox\"\n"
+                "2. Write the text \"hello\" to file \"sandbox/note.txt\"\n"
+                "3. Write the text \"workflow\" to file \"sandbox/readme.txt\"\n"
+                "4. List files in the \"sandbox\" directory\n"
+                "5. Compress files \"sandbox/note.txt\" and \"sandbox/readme.txt\" to \"backup.zip\"\n"
+                "6. Send notification with title \"Backup\" and message \"Archive created\""
+            ),
+            "requires_credentials": [],
+        },
+        {
+            "name": "Bitcoin Price Email (requires SMTP)",
+            "description": "Download the Bitcoin price and email it. Will prompt for SMTP credentials if not configured.",
+            "workflow": (
+                "1. Download https://api.coinbase.com/v2/prices/BTC-USD/spot\n"
+                "2. Process the JSON response to extract the USD price\n"
+                "3. Send email to admin@example.com with subject \"Bitcoin Price\" and body including the price"
+            ),
+            "requires_credentials": ACTION_REQUIREMENTS["send_email"],
+        },
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Shutdown hooks
+# ---------------------------------------------------------------------------
+
+
+def _cleanup_on_exit() -> None:
+    debug_mode = _is_debug()
     if debug_mode:
-        print("\n🧹 Cleaning up temporary files...")
-    
-    # Import and call the cleanup function from cleanup.py
+        print("\nCleaning up temporary files...")
     from cleanup import cleanup_files
+
     cleanup_files(verbose=debug_mode)
 
 
-def signal_handler(signum, frame):
-    """Handle shutdown signals"""
-    # Check if we're in debug mode
-    debug_mode = '--debug' in sys.argv
-    
-    if debug_mode:
-        print(f"\n🛑 Received signal {signum}, shutting down...")
+def _signal_handler(signum, frame):  # type: ignore[no-untyped-def]
+    if _is_debug():
+        print(f"\nReceived signal {signum}, shutting down...")
     else:
-        print()  # Just add a newline for clean exit
-    
-    cleanup_on_exit()
-    exit(0)
+        print()
+    _cleanup_on_exit()
+    sys.exit(0)
 
-# Register signal handlers
-signal.signal(signal.SIGINT, signal_handler)
-signal.signal(signal.SIGTERM, signal_handler)
 
-# Flask routes
-@app.route('/')
+signal.signal(signal.SIGINT, _signal_handler)
+signal.signal(signal.SIGTERM, _signal_handler)
+
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+
+
+@app.route("/")
 def index():
-    """Main page with workflow creation interface"""
-    return render_template('index.html')
+    return render_template("index.html")
 
-@app.route('/api/tools')
+
+@app.route("/api/tools")
 def get_tools():
-    """Get list of available tools"""
     registry = ToolRegistry()
-    tools = []
-    for tool in registry.list_tools():
-        tools.append({
-            'name': tool.name,
-            'description': tool.description,
-            'parameters': tool.parameters
-        })
-    return jsonify(tools)
+    return jsonify(
+        [
+            {
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": tool.parameters,
+            }
+            for tool in registry.list_tools()
+        ]
+    )
 
-@app.route('/api/parse-workflow', methods=['POST'])
+
+@app.route("/api/examples")
+def get_examples():
+    return jsonify(_examples())
+
+
+@app.route("/api/parse-workflow", methods=["POST"])
 def parse_workflow():
-    """Parse workflow text and return structured steps"""
     try:
-        workflow_text = request.json.get('workflow_text', '')
+        payload = request.get_json(silent=True) or {}
+        workflow_text = payload.get("workflow_text", "")
+        creds = _sanitize_credentials(payload.get("credentials"))
+        api_key = _resolve_api_key(creds)
         parser = WorkflowParser()
         steps = parser.parse_workflow(workflow_text)
-        
-        result = []
-        for step in steps:
-            result.append({
-                'step_id': step.step_id,
-                'description': step.description,
-                'action': step.action,
-                'parameters': step.parameters,
-                'dependencies': step.dependencies
-            })
-        
-        return jsonify({'success': True, 'steps': result})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
+        confidence = parser.assess_parse_confidence(steps)
 
-@app.route('/api/parse-video', methods=['POST'])
+        ai_assisted = False
+        ai_assist_error: Optional[str] = None
+        if api_key and confidence.get("needs_ai_assist"):
+            try:
+                ai_agent = WorkflowAgent(api_key=api_key)
+                improved = ai_agent.improve_parsed_steps(workflow_text, steps)
+                if improved:
+                    steps = improved
+                    ai_assisted = True
+                    confidence = parser.assess_parse_confidence(steps)
+            except Exception as exc:  # pragma: no cover - best effort enhancement
+                ai_assist_error = str(exc)
+
+        response: Dict[str, Any] = {
+            "success": True,
+            "steps": [_step_to_dict(s) for s in steps],
+            "parse_confidence": confidence,
+            "ai_assisted": ai_assisted,
+        }
+        if ai_assist_error and _is_debug():
+            response["ai_assist_error"] = ai_assist_error
+        return jsonify(response)
+    except Exception as exc:  # pragma: no cover - defensive
+        return jsonify({"success": False, "error": str(exc)})
+
+
+@app.route("/api/parse-video", methods=["POST"])
 def parse_video():
-    """Process uploaded video and return workflow steps"""
+    """Extract frames from an uploaded video and infer a workflow."""
+    debug_mode = _is_debug()
+    video_path: Optional[str] = None
+    temp_dir: Optional[str] = None
     try:
-        # Check if we're in debug mode
-        debug_mode = '--debug' in sys.argv
-        if 'video' not in request.files:
-            return jsonify({'success': False, 'error': 'No video file provided'})
-        
-        video_file = request.files['video']
-        if video_file.filename == '':
-            return jsonify({'success': False, 'error': 'No video file selected'})
-        
-        # Save uploaded video to temporary file
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as tmp_file:
+        if "video" not in request.files:
+            return jsonify({"success": False, "error": "No video file provided"})
+        video_file = request.files["video"]
+        if not video_file.filename:
+            return jsonify({"success": False, "error": "No video file selected"})
+
+        creds = _sanitize_credentials(
+            _creds_from_form_or_json(request.form.get("credentials"))
+        )
+        api_key = _resolve_api_key(creds)
+        if not api_key:
+            return jsonify(
+                {
+                    "success": False,
+                    "error": "Missing GEMINI_API_KEY. Add it in Settings or .env.",
+                    "missing_requirements": ["GEMINI_API_KEY"],
+                }
+            )
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp_file:
             video_file.save(tmp_file.name)
             video_path = tmp_file.name
-        
-        # Process video to get workflow text directly
-        api_key = os.getenv('GEMINI_API_KEY')
-        if not api_key:
-            return jsonify({'success': False, 'error': 'GEMINI_API_KEY not found in environment'})
-        
-        # Use the video processing function to get workflow text directly
-        from workflowmvp.video_to_workflow import sample_frames_intelligent, infer_workflow_from_frames
-        import contextlib
-        import io
-        
-        try:
-            # Suppress output in non-debug mode
-            if not debug_mode:
-                # Redirect stdout to suppress video processing output
-                with contextlib.redirect_stdout(io.StringIO()):
-                    # Extract frames from video
-                    frames, temp_dir = sample_frames_intelligent(video_path, max_frames=15)
-                    if not frames:
-                        return jsonify({'success': False, 'error': 'No frames could be extracted from the video'})
-                    
-                    # Generate workflow text from frames
-                    workflow_text = infer_workflow_from_frames(frames, api_key)
-                    if not workflow_text or len(workflow_text.strip()) < 10:
-                        return jsonify({'success': False, 'error': 'AI analysis produced no meaningful workflow'})
-            else:
-                # Debug mode - show all output
-                # Extract frames from video
-                frames, temp_dir = sample_frames_intelligent(video_path, max_frames=15)
-                if not frames:
-                    return jsonify({'success': False, 'error': 'No frames could be extracted from the video'})
-                
-                # Generate workflow text from frames
-                workflow_text = infer_workflow_from_frames(frames, api_key)
-                if not workflow_text or len(workflow_text.strip()) < 10:
-                    return jsonify({'success': False, 'error': 'AI analysis produced no meaningful workflow'})
-            
-            # Parse the workflow text to get structured steps
-            parser = WorkflowParser()
-            steps = parser.parse_workflow(workflow_text)
-            
-            # Convert to JSON-serializable format
-            result = []
-            for step in steps:
-                result.append({
-                    'step_id': step.step_id,
-                    'description': step.description,
-                    'action': step.action,
-                    'parameters': step.parameters,
-                    'dependencies': step.dependencies
-                })
-            
-            return jsonify({'success': True, 'steps': result, 'workflow_text': workflow_text})
-            
-        except Exception as e:
-            return jsonify({'success': False, 'error': str(e)})
-        finally:
-            # Clean up temporary files
-            if os.path.exists(video_path):
+
+        from workflowmvp.video_to_workflow import (
+            infer_workflow_from_frames,
+            sample_frames_intelligent,
+        )
+
+        frames, temp_dir = sample_frames_intelligent(video_path, max_frames=15)
+        if not frames:
+            return jsonify(
+                {"success": False, "error": "No frames could be extracted from the video"}
+            )
+        workflow_text = infer_workflow_from_frames(frames, api_key)
+        if not workflow_text or len(workflow_text.strip()) < 10:
+            return jsonify(
+                {"success": False, "error": "AI analysis produced no meaningful workflow"}
+            )
+
+        parser = WorkflowParser()
+        steps = parser.parse_workflow(workflow_text)
+        return jsonify(
+            {
+                "success": True,
+                "steps": [_step_to_dict(s) for s in steps],
+                "workflow_text": workflow_text,
+            }
+        )
+    except Exception as exc:
+        if debug_mode:
+            logging.exception("parse_video failed")
+        return jsonify({"success": False, "error": str(exc)})
+    finally:
+        if video_path and os.path.exists(video_path):
+            try:
                 os.unlink(video_path)
-            if 'temp_dir' in locals() and temp_dir and os.path.exists(temp_dir):
-                import shutil
+            except OSError:
+                pass
+        if temp_dir and os.path.isdir(temp_dir):
+            try:
                 shutil.rmtree(temp_dir)
-                
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
+            except OSError:
+                pass
 
-@app.route('/api/generate-workflow', methods=['POST'])
+
+@app.route("/api/generate-workflow", methods=["POST"])
 def generate_workflow():
-    """Generate Python code from workflow steps"""
     try:
-        steps_data = request.json.get('steps', [])
-        workflow_name = request.json.get('name', 'generated_workflow')
-        
-        
-        # Convert back to WorkflowStep objects
-        from workflowmvp.parser import WorkflowStep
-        steps = []
-        for step_data in steps_data:
-            step = WorkflowStep(
-                step_id=step_data['step_id'],
-                description=step_data['description'],
-                action=step_data['action'],
-                parameters=step_data['parameters'],
-                dependencies=step_data['dependencies']
+        payload = request.get_json(silent=True) or {}
+        steps_data = payload.get("steps", [])
+        workflow_name = _safe_name(payload.get("name", "generated_workflow"))
+        creds = _sanitize_credentials(payload.get("credentials"))
+
+        api_key = _resolve_api_key(creds)
+        if not api_key:
+            return jsonify(
+                {
+                    "success": False,
+                    "error": "Missing GEMINI_API_KEY. Add it in Settings or .env.",
+                    "missing_requirements": ["GEMINI_API_KEY"],
+                }
             )
-            steps.append(step)
-        
-        # Generate code with timestamp for uniqueness
-        import time
+
+        steps = [
+            WorkflowStep(
+                step_id=step["step_id"],
+                description=step["description"],
+                action=step["action"],
+                parameters=step["parameters"],
+                dependencies=step["dependencies"],
+            )
+            for step in steps_data
+        ]
+
+        os.makedirs(GENERATED_DIR, exist_ok=True)
         timestamp = int(time.time())
-        output_path = f"data/generated_workflows/{workflow_name}_{timestamp}.py"
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        
-        
-        agent = WorkflowAgent(api_key=os.getenv('GEMINI_API_KEY'), model='gemini-1.5-flash')
-        generated_code = agent.generate_workflow_code(steps, output_path)
-        
-        return jsonify({
-            'success': True, 
-            'output_path': output_path,
-            'message': 'Workflow generated successfully'
-        })
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
+        output_path = os.path.join(
+            GENERATED_DIR, f"{workflow_name}_{timestamp}.py"
+        )
+        agent = WorkflowAgent(api_key=api_key)
+        agent.generate_workflow_code(steps, output_path)
 
-@app.route('/api/run-workflow', methods=['POST'])
+        # Return path relative to project root so the UI can treat it as opaque.
+        return jsonify(
+            {
+                "success": True,
+                "output_path": os.path.relpath(output_path, PROJECT_ROOT),
+                "message": "Workflow generated successfully",
+            }
+        )
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)})
+
+
+@app.route("/api/check-requirements", methods=["POST"])
+def check_requirements():
+    """Return which credential env vars a parsed workflow still needs."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        steps = payload.get("steps", [])
+        creds = _sanitize_credentials(payload.get("credentials"))
+        missing = _missing_requirements(steps, creds)
+        return jsonify({"success": True, "missing": missing})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)})
+
+
+@app.route("/api/run-workflow", methods=["POST"])
 def run_workflow():
-    """Run a generated workflow"""
+    """Run a generated workflow (blocking) and return stdout/stderr."""
+    payload = request.get_json(silent=True) or {}
+    workflow_path = payload.get("workflow_path", "")
+    creds = _sanitize_credentials(payload.get("credentials"))
+
+    abs_path = _resolve_workflow_path(workflow_path)
+    if not abs_path:
+        return jsonify({"success": False, "error": "Workflow file not found"})
+
+    run_id = uuid.uuid4().hex[:12]
+    run_dir = _ensure_run_dir(run_id)
+    env = _build_run_env(creds)
+    env["WORKFLOW_RUN_ID"] = run_id
+    env["WORKFLOW_OUTPUT_DIR"] = run_dir
+
     try:
-        workflow_path = request.json.get('workflow_path', '')
-        
-        if not os.path.exists(workflow_path):
-            return jsonify({'success': False, 'error': 'Workflow file not found'})
-        
-        # Change to data/temp_outputs directory for workflow execution
-        original_cwd = os.getcwd()
-        temp_dir = os.path.join(original_cwd, 'data', 'temp_outputs')
-        os.makedirs(temp_dir, exist_ok=True)
-        os.chdir(temp_dir)
-        
-        try:
-            # Run the workflow
-            result = subprocess.run(
-                ['python3', os.path.join(original_cwd, workflow_path)],
-                capture_output=True,
-                text=True,
-                timeout=60
-            )
-            
-            return jsonify({
-                'success': result.returncode == 0,
-                'stdout': result.stdout,
-                'stderr': result.stderr,
-                'returncode': result.returncode
-            })
-        finally:
-            # Always change back to original directory
-            os.chdir(original_cwd)
-                
+        result = subprocess.run(
+            ["python3", abs_path],
+            cwd=run_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        return jsonify(
+            {
+                "success": result.returncode == 0,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+                "returncode": result.returncode,
+                "run_id": run_id,
+            }
+        )
     except subprocess.TimeoutExpired:
-        return jsonify({'success': False, 'error': 'Workflow timed out'})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
+        return jsonify({"success": False, "error": "Workflow timed out"})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)})
 
-@app.route('/api/cleanup', methods=['POST'])
+
+@app.route("/api/run-workflow/stream", methods=["POST"])
+def run_workflow_stream():
+    """Run a generated workflow and stream stdout/stderr via Server-Sent Events."""
+    payload = request.get_json(silent=True) or {}
+    workflow_path = payload.get("workflow_path", "")
+    creds = _sanitize_credentials(payload.get("credentials"))
+
+    abs_path = _resolve_workflow_path(workflow_path)
+    if not abs_path:
+        return _sse_error("Workflow file not found")
+
+    run_id = uuid.uuid4().hex[:12]
+    run_dir = _ensure_run_dir(run_id)
+    env = _build_run_env(creds)
+    env["WORKFLOW_RUN_ID"] = run_id
+    env["WORKFLOW_OUTPUT_DIR"] = run_dir
+    env["PYTHONUNBUFFERED"] = "1"
+
+    def generate() -> Iterable[bytes]:
+        yield _sse("status", {"message": "starting", "run_id": run_id})
+        proc = subprocess.Popen(  # noqa: S603
+            ["python3", "-u", abs_path],
+            cwd=run_dir,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        try:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                yield _sse("log", {"line": line.rstrip("\n")})
+            proc.wait(timeout=120)
+            yield _sse(
+                "done",
+                {
+                    "returncode": proc.returncode,
+                    "success": proc.returncode == 0,
+                    "run_id": run_id,
+                },
+            )
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            yield _sse("error", {"message": "Workflow timed out"})
+        except Exception as exc:  # pragma: no cover - defensive
+            yield _sse("error", {"message": str(exc)})
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.route("/api/cleanup", methods=["POST"])
 def cleanup_files_api():
-    """Clean up all generated workflow files and temp outputs"""
     try:
-        # Check if we're in debug mode
-        debug_mode = '--debug' in sys.argv
-        
-        # Import and call the cleanup function from cleanup.py
         from cleanup import cleanup_files
-        cleanup_count = cleanup_files(verbose=debug_mode)
-        
-        return jsonify({
-            'success': True,
-            'message': f'Cleaned up {cleanup_count} files',
-            'files_cleaned': cleanup_count
-        })
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
 
-@app.route('/api/examples')
-def get_examples():
-    """Get example workflows"""
-    examples = [
-        {
-            'name': 'Bitcoin Price Alert',
-            'description': 'Download Bitcoin price and send email notification',
-            'workflow': '''1. Download Bitcoin price from https://api.coinbase.com/v2/exchange-rates?currency=BTC
-2. Extract the USD price from the JSON response
-3. Send email to admin@company.com with subject "Bitcoin Price Alert"
-4. Include the current price in the email body'''
-        },
-        {
-            'name': 'Data Processing Pipeline',
-            'description': 'Process CSV data and generate report',
-            'workflow': '''1. Read data from users.csv file
-2. Calculate total number of users
-3. Calculate average age of users
-4. Write results to report.txt file
-5. Send notification "Data processing complete"'''
-        },
-        {
-            'name': 'File Backup',
-            'description': 'Backup important files to archive',
-            'workflow': '''1. List all files in documents folder
-2. Compress important files to backup.zip
-3. Move backup.zip to backup folder
-4. Send notification "Backup completed successfully"'''
-        }
-    ]
-    return jsonify(examples)
+        count = cleanup_files(verbose=_is_debug())
+        return jsonify(
+            {"success": True, "message": f"Cleaned up {count} files", "files_cleaned": count}
+        )
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)})
 
-def main():
-    """Main entry point - launches the web interface"""
-    parser = argparse.ArgumentParser(description='WorkflowMVP - Web Interface')
-    parser.add_argument('--debug', action='store_true', help='Enable debug mode (auto-reload on file changes)')
-    
+
+# ---------------------------------------------------------------------------
+# Small helpers
+# ---------------------------------------------------------------------------
+
+
+def _step_to_dict(step: WorkflowStep) -> Dict[str, Any]:
+    return {
+        "step_id": step.step_id,
+        "description": step.description,
+        "action": step.action,
+        "parameters": step.parameters,
+        "dependencies": step.dependencies,
+    }
+
+
+def _safe_name(name: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_\-]", "_", name).strip("_")
+    return cleaned or "generated_workflow"
+
+
+def _resolve_workflow_path(raw: str) -> Optional[str]:
+    """Resolve a workflow path and ensure it stays under data/generated_workflows."""
+    if not raw:
+        return None
+    candidate = raw if os.path.isabs(raw) else os.path.join(PROJECT_ROOT, raw)
+    candidate = os.path.abspath(candidate)
+    if not candidate.startswith(GENERATED_DIR + os.sep) and candidate != GENERATED_DIR:
+        return None
+    if not os.path.exists(candidate):
+        return None
+    return candidate
+
+
+def _creds_from_form_or_json(raw: Any) -> Dict[str, Any]:
+    """Parse a credentials blob from either a JSON body field or a multipart form field."""
+    if not raw:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def _sse(event: str, data: Dict[str, Any]) -> bytes:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
+
+
+def _sse_error(message: str) -> Response:
+    def gen() -> Iterable[bytes]:
+        yield _sse("error", {"message": message})
+
+    return Response(stream_with_context(gen()), mimetype="text/event-stream")
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+
+def _airplay_hint(port: int) -> str:
+    """Hint shown when port 5000 is in use on macOS."""
+    if sys.platform == "darwin" and port == 5000:
+        return (
+            " On macOS, AirPlay Receiver claims port 5000 by default. Either"
+            " disable it in System Settings > General > AirDrop & Handoff,"
+            " or rerun with `--port 5050` (or any free port)."
+        )
+    return ""
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="WorkflowMVP - Web Interface")
+    parser.add_argument(
+        "--debug", action="store_true", help="Enable Flask debug mode (auto-reload)"
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=int(os.getenv("PORT", "5050")),
+        help="Port to bind (default: env PORT or 5050)",
+    )
+    parser.add_argument(
+        "--host",
+        default=os.getenv("HOST", "0.0.0.0"),
+        help="Host interface to bind (default: env HOST or 0.0.0.0)",
+    )
     args = parser.parse_args()
-    
-    print("🚀 WorkflowMVP - Web Interface")
-    print("🌐 Starting web server...")
-    print("📱 Open your browser to: http://localhost:5000")
-    print("🛑 Press Ctrl+C to stop")
+
+    os.makedirs(GENERATED_DIR, exist_ok=True)
+    os.makedirs(TEMP_OUTPUTS_DIR, exist_ok=True)
+
+    print("WorkflowMVP - Web Interface")
+    print("Starting web server...")
+    print(f"Open your browser to: http://localhost:{args.port}")
+    print("Press Ctrl+C to stop.")
     if args.debug:
-        print("🐛 Debug mode: ON (auto-reload enabled)")
-    else:
-        print("ℹ️  Debug mode: OFF (use --debug to enable)")
-    print()
-    
-    # Start the Flask app
-    if args.debug:
-        app.run(debug=True, host='0.0.0.0', port=5000)
-    else:
-        # Suppress development server warning and HTTP requests in production mode
-        import warnings
-        import logging
-        log = logging.getLogger('werkzeug')
-        log.setLevel(logging.ERROR)
-        
+        print("Debug mode: ON (auto-reload enabled)")
+
+    try:
+        if args.debug:
+            app.run(debug=True, host=args.host, port=args.port)
+            return
+
+        logging.getLogger("werkzeug").setLevel(logging.ERROR)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            app.run(debug=False, host='0.0.0.0', port=5000)
+            app.run(debug=False, host=args.host, port=args.port)
+    except OSError as exc:
+        # Most commonly: port in use.
+        message = f"Could not bind to {args.host}:{args.port}: {exc}."
+        print(message + _airplay_hint(args.port))
+        sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
