@@ -104,7 +104,7 @@ def test_download_uses_requests(registry: ToolRegistry, monkeypatch: pytest.Monk
         def raise_for_status(self) -> None:
             return None
 
-    def fake_get(url: str, timeout: int = 30) -> FakeResponse:
+    def fake_get(url: str, timeout: int = 30, **_: object) -> FakeResponse:
         assert url.startswith("http")
         assert timeout >= 1
         return FakeResponse()
@@ -130,7 +130,7 @@ def test_download_retries_transient_failures(
         def raise_for_status(self) -> None:
             return None
 
-    def flaky_get(url: str, timeout: int = 30):  # type: ignore[no-untyped-def]
+    def flaky_get(url: str, timeout: int = 30, **_: object):  # type: ignore[no-untyped-def]
         calls["count"] += 1
         if calls["count"] < 3:
             raise requests.RequestException("transient")

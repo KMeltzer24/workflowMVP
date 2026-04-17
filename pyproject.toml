@@ -24,12 +24,13 @@ classifiers = [
     "Framework :: Flask",
 ]
 dependencies = [
-    "google-generativeai>=0.3.0",
+    "google-genai>=1.0.0",
     "requests>=2.28.0",
     "python-dotenv>=1.0.0",
     "opencv-python>=4.9.0.80",
     "flask>=2.3.0",
     "yfinance>=0.2.0",
+    "beautifulsoup4>=4.12.0",
 ]
 
 [project.optional-dependencies]

@@ -888,20 +888,42 @@ class ToolRegistry:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    # Web scraping (basic implementation)
+    # Web scraping
     _SCRAPE_MAX_CHARS = 4000  # keep payloads well inside LLM context limits
 
     def _scrape_webpage(self, url: str, selector: Optional[str] = None, extract_text: bool = True) -> Dict[str, Any]:
-        """Scrape content from webpage, truncating to _SCRAPE_MAX_CHARS to avoid
-        overflowing LLM context windows when the result is passed to generate_text."""
+        """Scrape a webpage and return clean readable text (HTML tags stripped).
+
+        Uses BeautifulSoup when available to extract only visible text, removing
+        scripts, styles, navigation, and other noise. Falls back to raw HTML if
+        BeautifulSoup is not installed. Content is truncated to _SCRAPE_MAX_CHARS
+        to stay within LLM context limits.
+        """
         try:
             response = self._request_with_retry(url, timeout=30, attempts=3)
-            raw = response.text
-            truncated = len(raw) > self._SCRAPE_MAX_CHARS
-            content = raw[: self._SCRAPE_MAX_CHARS] if truncated else raw
-            result = {"success": True, "content": content, "url": url}
+            raw_html = response.text
+
+            try:
+                from bs4 import BeautifulSoup
+
+                soup = BeautifulSoup(raw_html, "html.parser")
+                # Remove non-content elements
+                for tag in soup(["script", "style", "nav", "header", "footer",
+                                  "aside", "noscript", "iframe", "form"]):
+                    tag.decompose()
+                # Get visible text with whitespace normalised
+                text = soup.get_text(separator="\n")
+                text = "\n".join(
+                    line.strip() for line in text.splitlines() if line.strip()
+                )
+            except ImportError:
+                text = raw_html  # fallback: raw HTML
+
+            truncated = len(text) > self._SCRAPE_MAX_CHARS
+            content = text[: self._SCRAPE_MAX_CHARS] if truncated else text
+            result: Dict[str, Any] = {"success": True, "content": content, "url": url}
             if truncated:
-                result["note"] = f"Content truncated to {self._SCRAPE_MAX_CHARS} chars (original: {len(raw)})"
+                result["note"] = f"Content truncated to {self._SCRAPE_MAX_CHARS} chars (original: {len(text)})"
             return result
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -929,14 +951,15 @@ class ToolRegistry:
                 }
 
             if provider == "gemini":
-                import google.generativeai as genai
+                from google import genai as google_genai
+                from google.genai import types as genai_types
 
-                genai.configure(api_key=api_key)
                 model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-                model = genai.GenerativeModel(model_name)
-                response = model.generate_content(
-                    prompt,
-                    generation_config=genai.types.GenerationConfig(
+                client = google_genai.Client(api_key=api_key)
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=genai_types.GenerateContentConfig(
                         temperature=0.7,
                         max_output_tokens=max_tokens,
                     ),
@@ -1052,19 +1075,28 @@ class ToolRegistry:
             return {"success": False, "error": str(exc)}
 
     # Notifications
+    @staticmethod
+    def _applescript_literal(value: str) -> str:
+        """Quote a string for use inside AppleScript double-quoted text (escape \\ and ")."""
+        return str(value).replace("\\", "\\\\").replace('"', '\\"')
+
     def _send_notification(self, title: str, message: str, urgency: str = "normal") -> Dict[str, Any]:
         """Send a desktop notification.
 
-        Falls back gracefully: on systems without a notification backend (for
-        example headless CI), the call still returns success=True and includes
-        a note so workflows don't fail purely because notifications aren't wired.
+        On macOS, uses ``osascript`` (Notification Center). If that fails, tries
+        ``terminal-notifier`` when installed. Failures return ``success=False``
+        with stderr so callers are not misled when nothing appeared.
+
+        On Linux without ``notify-send``, returns success with a note (CI/headless).
         """
         try:
-            safe_title = str(title).replace('"', "'")
-            safe_msg = str(message).replace('"', "'")
+            title_s = str(title)
+            message_s = str(message)
 
             if os.name == "nt":  # Windows
-                subprocess.run(
+                safe_title = title_s.replace("'", "''")
+                safe_msg = message_s.replace("'", "''")
+                proc = subprocess.run(
                     [
                         "powershell",
                         "-Command",
@@ -1075,31 +1107,62 @@ class ToolRegistry:
                     ],
                     capture_output=True,
                     timeout=10,
+                    text=True,
                 )
+                if proc.returncode != 0:
+                    err = (proc.stderr or proc.stdout or "").strip() or f"exit {proc.returncode}"
+                    return {"success": False, "error": err}
             elif sys.platform == "darwin":  # macOS
-                subprocess.run(
-                    [
-                        "osascript",
-                        "-e",
-                        f'display notification "{safe_msg}" with title "{safe_title}"',
-                    ],
+                astitle = self._applescript_literal(title_s)
+                asmsg = self._applescript_literal(message_s)
+                script = f'display notification "{asmsg}" with title "{astitle}"'
+                proc = subprocess.run(
+                    ["osascript", "-e", script],
                     capture_output=True,
                     timeout=10,
+                    text=True,
                 )
+                if proc.returncode != 0:
+                    tn = shutil.which("terminal-notifier")
+                    if tn:
+                        proc2 = subprocess.run(
+                            [tn, "-title", title_s, "-message", message_s],
+                            capture_output=True,
+                            timeout=10,
+                            text=True,
+                        )
+                        if proc2.returncode == 0:
+                            return {"success": True, "title": title_s, "message": message_s}
+                    err = (proc.stderr or proc.stdout or "").strip() or f"osascript exit {proc.returncode}"
+                    return {
+                        "success": False,
+                        "error": (
+                            f"{err} — If you ran the workflow from a remote/headless environment, "
+                            "macOS cannot show Notification Center banners there. Run locally in "
+                            "Terminal (same user as the logged-in desktop), or allow automation "
+                            "for your terminal app in System Settings → Privacy & Security."
+                        ),
+                    }
             else:  # Linux and other Unix
                 if shutil.which("notify-send"):
-                    subprocess.run(
-                        ["notify-send", title, message], capture_output=True, timeout=10
+                    proc = subprocess.run(
+                        ["notify-send", title_s, message_s],
+                        capture_output=True,
+                        timeout=10,
+                        text=True,
                     )
+                    if proc.returncode != 0:
+                        err = (proc.stderr or proc.stdout or "").strip() or f"exit {proc.returncode}"
+                        return {"success": False, "error": err}
                 else:
                     return {
                         "success": True,
-                        "title": title,
-                        "message": message,
+                        "title": title_s,
+                        "message": message_s,
                         "note": "notify-send not available; notification skipped",
                     }
 
-            return {"success": True, "title": title, "message": message}
+            return {"success": True, "title": title_s, "message": message_s}
         except Exception as e:
             return {"success": False, "error": str(e)}
 

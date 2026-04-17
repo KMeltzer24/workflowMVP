@@ -28,7 +28,7 @@ import warnings
 from collections.abc import Iterable
 from typing import Any, Dict, List, Optional
 
-# Suppress noisy gRPC / ALTS warnings emitted by google-generativeai on import.
+# Suppress noisy gRPC / ALTS warnings emitted by some Google client stacks on import.
 os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
 os.environ.setdefault("GRPC_TRACE", "")
 os.environ.setdefault("GLOG_minloglevel", "2")
@@ -269,14 +269,18 @@ def _examples() -> List[Dict[str, str]]:
         },
         {
             "name": "S&P 500 Haiku",
-            "description": "Fetch the current S&P 500 price, write a haiku about it using AI, and save it to a file.",
+            "description": (
+                "Fetch the current S&P 500 price, write a haiku with AI, save it to a file, "
+                "and email that file's contents."
+            ),
             "workflow": (
                 "1. Fetch the current price of the S&P 500 (ticker ^GSPC)\n"
                 "2. Write a haiku about the S&P 500 price\n"
                 "3. Write the haiku to file \"sp500_haiku.txt\"\n"
-                "4. Send notification with title \"S&P 500\" and message \"Haiku saved\""
+                "4. Send email to kevinmeltzer1@gmail.com with subject \"S&P 500 Haiku\" "
+                "and body set to the full contents of file \"sp500_haiku.txt\""
             ),
-            "requires_credentials": [],
+            "requires_credentials": ACTION_REQUIREMENTS["send_email"],
         },
         {
             "name": "SPY 5-Day Change",

@@ -36,10 +36,14 @@ class WorkflowParser:
         "delete_file": ["file_path"],
         "run_command": ["command"],
         "create_directory": ["directory"],
+        "list_files": ["directory"],
         "sqlite_query": ["database_path"],
         "sqlite_insert": ["database_path", "table"],
         "compress_files": ["archive_path"],
         "extract_archive": ["archive_path", "extract_to"],
+        "fetch_stock_price": ["ticker"],
+        "generate_text": ["prompt"],
+        "http_request": ["url"],
     }
 
     def parse_workflow(self, workflow_text: str) -> List[WorkflowStep]:
@@ -161,79 +165,158 @@ class WorkflowParser:
         return line.strip()
 
     def _extract_action_and_params(self, description: str) -> tuple[str, Dict[str, Any]]:
-        """Extract action and parameters from description with enhanced pattern matching"""
-        description_lower = description.lower()
+        """Map a step description to an action + parameters.
 
-        # Enhanced action patterns with more specific matching
-        if 'download' in description_lower or 'fetch' in description_lower:
-            action = 'download'
-            params = self._extract_url_params(description)
-        elif 'read' in description_lower and ('file' in description_lower or 'csv' in description_lower):
-            if 'csv' in description_lower:
-                action = 'read_csv'
-                params = self._extract_file_params(description)
-            else:
-                action = 'read_file'
-                params = self._extract_file_params(description)
-        elif 'write' in description_lower and ('file' in description_lower or 'csv' in description_lower):
-            if 'csv' in description_lower:
-                action = 'write_csv'
-                params = self._extract_file_params(description)
-            else:
-                action = 'write_file'
-                params = self._extract_file_params(description)
-        elif 'send' in description_lower and 'email' in description_lower:
-            action = 'send_email'
-            params = self._extract_email_params(description)
-        elif 'process' in description_lower or 'transform' in description_lower:
-            if 'json' in description_lower:
-                action = 'process_json'
-                params = self._extract_json_params(description)
-            else:
-                action = 'process_data'
-                params = self._extract_process_params(description)
-        elif 'wait' in description_lower or 'sleep' in description_lower:
-            action = 'wait'
-            params = self._extract_wait_params(description)
-        elif 'copy' in description_lower and 'file' in description_lower:
-            action = 'copy_file'
-            params = self._extract_file_operation_params(description)
-        elif 'move' in description_lower and 'file' in description_lower:
-            action = 'move_file'
-            params = self._extract_file_operation_params(description)
-        elif 'delete' in description_lower and 'file' in description_lower:
-            action = 'delete_file'
-            params = self._extract_file_params(description)
-        elif 'run' in description_lower and ('command' in description_lower or 'script' in description_lower):
-            action = 'run_command'
-            params = self._extract_command_params(description)
-        elif 'database' in description_lower or 'sql' in description_lower:
-            if 'insert' in description_lower or 'add' in description_lower:
-                action = 'sqlite_insert'
-                params = self._extract_database_params(description)
-            else:
-                action = 'sqlite_query'
-                params = self._extract_database_params(description)
-        elif 'scrape' in description_lower or 'extract' in description_lower:
-            action = 'scrape_webpage'
-            params = self._extract_url_params(description)
-        elif 'compress' in description_lower or 'zip' in description_lower:
-            action = 'compress_files'
-            params = self._extract_compression_params(description)
-        elif 'extract' in description_lower and 'archive' in description_lower:
-            action = 'extract_archive'
-            params = self._extract_compression_params(description)
-        elif 'analyze' in description_lower or 'calculate' in description_lower:
-            action = 'analyze_data'
-            params = self._extract_analysis_params(description)
-        elif 'notify' in description_lower or 'notification' in description_lower:
-            action = 'send_notification'
-            params = self._extract_notification_params(description)
-        else:
-            action = 'custom'
-            params = {'description': description}
+        Uses word-level matching to avoid false positives (e.g. "readme.txt"
+        containing the substring "read" should not trigger read_file).
+        """
+        d = description.lower()
+        # Word set for exact-word checks — avoids substring false positives.
+        words = set(re.findall(r'\b\w+\b', d))
 
-        return action, params
+        # ── Filesystem: directory ops (before file read/write) ───────────────
+        if ('create' in words or 'make' in words or 'mkdir' in words) and \
+                ('directory' in words or 'folder' in words or 'dir' in words):
+            return 'create_directory', self._extract_directory_params(description)
+
+        if 'list' in words and ('file' in words or 'files' in words or
+                                'directory' in words or 'folder' in words):
+            return 'list_files', self._extract_directory_params(description)
+
+        # ── Network ──────────────────────────────────────────────────────────
+        if 'download' in words:
+            return 'download', self._extract_url_params(description)
+
+        if 'scrape' in words or ('fetch' in words and 'http' in d):
+            return 'scrape_webpage', self._extract_url_params(description)
+
+        if ('post' in words or 'put' in words or 'patch' in words) and \
+                ('api' in words or 'webhook' in words or 'http' in words or 'request' in words):
+            return 'http_request', self._extract_url_params(description)
+
+        # ── Finance ──────────────────────────────────────────────────────────
+        if ('price' in words or 'stock' in words or 'ticker' in words) and \
+                ('fetch' in words or 'get' in words or 'find' in words or 'check' in words):
+            ticker = self._extract_stock_ticker(description)
+            return 'fetch_stock_price', {
+                'ticker': ticker,
+                'description': description,
+            }
+
+        # ── AI text generation ────────────────────────────────────────────────
+        _creative = {'poem', 'story', 'message', 'summary', 'haiku', 'limerick',
+                     'reminder', 'draft', 'compose', 'generate', 'write'}
+        if 'generate_text' in d or \
+                ('write' in words and _creative & words and
+                 'file' not in words and 'csv' not in words):
+            return 'generate_text', {'prompt': description, 'description': description}
+
+        # ── Archive: compress/extract (before read/write — "readme.zip" edge) ─
+        if 'compress' in words or ('zip' in words and ('file' in words or 'files' in words)):
+            return 'compress_files', self._extract_compression_params(description)
+
+        if 'extract' in words and ('archive' in words or 'zip' in words or 'unzip' in words):
+            return 'extract_archive', self._extract_compression_params(description)
+
+        # ── File write (before read — "readme" still contains "read") ─────────
+        if 'write' in words:
+            if 'csv' in words:
+                return 'write_csv', self._extract_file_params(description)
+            return 'write_file', self._extract_file_params(description)
+
+        # ── File read ─────────────────────────────────────────────────────────
+        if 'read' in words and ('file' in words or 'csv' in words):
+            if 'csv' in words:
+                return 'read_csv', self._extract_file_params(description)
+            return 'read_file', self._extract_file_params(description)
+
+        # ── File ops ─────────────────────────────────────────────────────────
+        if 'copy' in words and 'file' in words:
+            return 'copy_file', self._extract_file_operation_params(description)
+        if 'move' in words and 'file' in words:
+            return 'move_file', self._extract_file_operation_params(description)
+        if 'delete' in words and 'file' in words:
+            return 'delete_file', self._extract_file_params(description)
+
+        # ── Email / notification ──────────────────────────────────────────────
+        has_address = bool(re.search(r'[\w.-]+@[\w.-]+\.\w+', description))
+        if has_address and (
+            'email' in words
+            or 'mail' in words
+            or 'send' in words
+            or 'forward' in words
+        ):
+            return 'send_email', self._extract_email_params(description)
+
+        if 'notify' in words or 'notification' in words or \
+                ('send' in words and 'notification' in words):
+            return 'send_notification', self._extract_notification_params(description)
+
+        # ── Data ─────────────────────────────────────────────────────────────
+        if 'process' in words or 'transform' in words:
+            if 'json' in words:
+                return 'process_json', self._extract_json_params(description)
+            return 'process_data', self._extract_process_params(description)
+
+        if 'analyze' in words or 'calculate' in words or \
+                'compute' in words or 'average' in words:
+            return 'analyze_data', self._extract_analysis_params(description)
+
+        # ── Database ─────────────────────────────────────────────────────────
+        if 'database' in words or 'sql' in words or 'sqlite' in words:
+            if 'insert' in words or 'add' in words:
+                return 'sqlite_insert', self._extract_database_params(description)
+            return 'sqlite_query', self._extract_database_params(description)
+
+        # ── System ───────────────────────────────────────────────────────────
+        if 'run' in words and ('command' in words or 'script' in words or 'shell' in words):
+            return 'run_command', self._extract_command_params(description)
+
+        if 'wait' in words or 'sleep' in words or 'pause' in words:
+            return 'wait', self._extract_wait_params(description)
+
+        return 'custom', {'description': description}
+
+    def _extract_stock_ticker(self, description: str) -> str:
+        """Resolve a ticker symbol without matching common words like 'find'."""
+        d = description.strip()
+        m = re.search(r'\^[A-Za-z]{1,10}\b', d)
+        if m:
+            return m.group(0).upper()
+        m = re.search(r'\b[A-Za-z]{1,6}-USD\b', d, re.IGNORECASE)
+        if m:
+            sym = m.group(0)
+            return sym[:-4].upper() + '-USD'
+        m = re.search(
+            r'\b(?:price|cost)\s+of\s+(?:the\s+)?([A-Za-z]{1,5})\b',
+            d,
+            re.IGNORECASE,
+        )
+        if m:
+            return m.group(1).upper()
+        m = re.search(
+            r'\b(?:ticker|symbol)\s+is\s+([A-Za-z]{1,5})\b',
+            d,
+            re.IGNORECASE,
+        )
+        if m:
+            return m.group(1).upper()
+        m = re.search(r'\b([A-Z]{1,5})\b', d)
+        if m:
+            return m.group(1).upper()
+        return ''
+
+    def _extract_directory_params(self, description: str) -> Dict[str, Any]:
+        """Extract directory path from description."""
+        quoted = re.search(r'["\']([^"\']+)["\']', description)
+        if quoted:
+            return {'directory': quoted.group(1), 'description': description}
+        # fallback: word after "called", "named", or "directory"
+        word = re.search(
+            r'(?:called|named|directory|folder)\s+["\']?(\S+)["\']?',
+            description, re.IGNORECASE,
+        )
+        return {'directory': word.group(1) if word else '', 'description': description}
 
     def _extract_url_params(self, description: str) -> Dict[str, Any]:
         """Extract URL parameters from description"""

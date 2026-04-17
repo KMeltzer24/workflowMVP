@@ -8,8 +8,9 @@ import os
 import re
 from typing import List, Optional
 
-import google.generativeai as genai
 import requests
+from google import genai
+from google.genai import types
 
 from .parser import WorkflowStep
 from .tools import ToolRegistry
@@ -55,10 +56,9 @@ class WorkflowAgent:
         )
 
         if self.api_key and self.provider == "gemini":
-            genai.configure(api_key=self.api_key)
-            self.client = genai.GenerativeModel(self.model)
+            self._gemini_client = genai.Client(api_key=self.api_key)
         else:
-            self.client = None
+            self._gemini_client = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -161,11 +161,12 @@ Rule-parser draft (for reference):
     def _generate_text(self, prompt: str, max_tokens: int = _CODE_GEN_MAX_TOKENS) -> str:
         """Send a prompt to the configured LLM and return the text response."""
         if self.provider == "gemini":
-            if not self.client:
+            if not self._gemini_client:
                 raise ValueError("Gemini client not initialised — check GEMINI_API_KEY.")
-            response = self.client.generate_content(
-                prompt,
-                generation_config=genai.types.GenerationConfig(
+            response = self._gemini_client.models.generate_content(
+                model=self.model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
                     temperature=0.1,
                     max_output_tokens=max_tokens,
                 ),
@@ -313,17 +314,18 @@ AI TEXT GENERATION — for any writing, summarising, translating, or creative ta
    r = gen.function(prompt="Write a short poem about SPY closing at $582.10")
    text = r.get('result', '') if r.get('success') else ''
 
-SCRAPING — scrape_webpage truncates to 4000 chars automatically; still slice before passing to generate_text.
-   CRITICAL: when building a generate_text prompt from scraped content, explicitly tell the model
-   to use ONLY information found in the content and to report missing details rather than inventing
-   placeholder text. Never allow [Insert date] / [Insert location] style placeholders in output:
-   scrape = tools.get_tool('scrape_webpage')
-   r = scrape.function(url='https://example.com')
+SCRAPING — scrape_webpage strips HTML tags and returns clean readable text (up to 4000 chars).
+   Always use the exact URL from the step description. Never guess or construct subpage paths.
+   Slice before passing to generate_text:
    content = (r.get('result') or r.get('content', ''))[:3000]
+
+   CRITICAL: when building a generate_text prompt from scraped content, explicitly tell the model
+   to use ONLY information found in the content and to state when details are missing — never
+   allow placeholder text like [Insert date] / [Insert location] in the output:
    gen.function(prompt=(
        f"Using ONLY the information in this webpage content, write a reminder message.\\n"
-       f"If specific details (dates, times, location) are not present in the content, "
-       f"say so clearly — do NOT use placeholder text like [Insert date].\\n\\n"
+       f"If specific details (dates, times, location) are not present, say so clearly.\\n"
+       f"Do NOT use placeholder text like [Insert date] — if the info is missing, say 'not found'.\\n\\n"
        f"Content:\\n{{content}}"
    ))
 
@@ -348,6 +350,16 @@ HTTP / REST APIs — use http_request for any POST/PUT/DELETE or API with auth:
 DATA ANALYSIS — analyze_data supports ONLY: sum, average, count, min, max.
    For comparisons, trends, or differences, write plain Python arithmetic instead.
 
+━━━ RECORDINGS VS. INTENT (UI-HEAVY STEPS) ━━━
+
+If steps read like a **screen recording** (Navigate, Type in search bar, Gmail compose, "Enter X into To/Subject/Body",
+long google.com URLs with tracking params, many consecutive `custom` steps before `send_email`):
+- Treat them as **demonstration of intent**, not a script to replay with logger.info per click.
+- Implement the **underlying goal**: compute or fetch fresh facts at runtime (datetime, zoneinfo, http_request to a time/market API, etc.), then call tools (e.g. send_email) with **computed** subject/body.
+- **Never** hardcode time-sensitive phrases copied from the narration (e.g. "closes in 22 mins", search-result snippets) as string literals in email body — recompute.
+
+Constants vs. dynamic: use descriptions **exactly** for stable user data (emails, file paths, API URLs, tickers). Recompute anything that depends on "now" or on-page search results.
+
 ━━━ LOGGING ━━━
 
 Log major milestones only — not every sub-step:
@@ -359,7 +371,7 @@ Log major milestones only — not every sub-step:
 ━━━ OUTPUT ━━━
 
 Generate ONLY the Python script — no markdown, no explanation, no comments beyond what is needed.
-Extract EXACT values from step descriptions (email addresses, URLs, tickers, etc.) — never use placeholders."""
+Extract exact values from step descriptions for **stable** fields only; compute time-sensitive and lookup-dependent content at runtime — never use placeholders for data you can compute."""
 
     def _create_user_prompt(self, steps: List[WorkflowStep]) -> str:
         steps_text = "".join(
@@ -372,5 +384,6 @@ Extract EXACT values from step descriptions (email addresses, URLs, tickers, etc
         )
         return (
             f"Generate a Python script for this workflow:\n{steps_text}\n"
-            "Use the EXACT values from the descriptions (emails, URLs, tickers, etc.)."
+            "Use exact values from descriptions for stable user-supplied data (emails, paths, tickers, API URLs). "
+            "If steps look UI-heavy or transcript-like, implement intent with fresh computation — do not replay every UI step or paste stale times/countdowns from the text."
         )
