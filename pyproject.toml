@@ -48,7 +48,7 @@ workflowmvp = "main:main"
 
 [tool.setuptools]
 packages = ["workflowmvp"]
-py-modules = ["main", "cleanup"]
+py-modules = ["main"]
 
 [tool.ruff]
 line-length = 100

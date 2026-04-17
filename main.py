@@ -62,6 +62,41 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 GENERATED_DIR = os.path.join(PROJECT_ROOT, "data", "generated_workflows")
 TEMP_OUTPUTS_DIR = os.path.join(PROJECT_ROOT, "data", "temp_outputs")
 
+
+def cleanup_files(verbose: bool = True) -> int:
+    """Wipe generated workflow scripts and everything under data/temp_outputs/."""
+    import glob
+
+    count = 0
+    for file_path in glob.glob(os.path.join(GENERATED_DIR, "*.py")):
+        try:
+            os.unlink(file_path)
+            count += 1
+            if verbose:
+                print(f"  deleted: {file_path}")
+        except OSError as exc:
+            if verbose:
+                print(f"  could not delete {file_path}: {exc}")
+
+    if os.path.isdir(TEMP_OUTPUTS_DIR):
+        for entry in os.listdir(TEMP_OUTPUTS_DIR):
+            path = os.path.join(TEMP_OUTPUTS_DIR, entry)
+            try:
+                if os.path.isfile(path) or os.path.islink(path):
+                    os.unlink(path)
+                elif os.path.isdir(path):
+                    shutil.rmtree(path)
+                count += 1
+                if verbose:
+                    print(f"  deleted: {path}")
+            except OSError as exc:
+                if verbose:
+                    print(f"  could not delete {path}: {exc}")
+
+    if verbose:
+        print(f"Cleanup complete. Removed {count} items.")
+    return count
+
 # Mapping of workflow actions -> env var keys they require. Used by
 # /api/check-requirements to tell the UI which creds are missing before a run.
 ACTION_REQUIREMENTS: Dict[str, List[str]] = {
@@ -244,8 +279,6 @@ def _cleanup_on_exit() -> None:
     debug_mode = _is_debug()
     if debug_mode:
         print("\nCleaning up temporary files...")
-    from cleanup import cleanup_files
-
     cleanup_files(verbose=debug_mode)
 
 
@@ -604,8 +637,6 @@ def run_workflow_stream():
 @app.route("/api/cleanup", methods=["POST"])
 def cleanup_files_api():
     try:
-        from cleanup import cleanup_files
-
         count = cleanup_files(verbose=_is_debug())
         return jsonify(
             {"success": True, "message": f"Cleaned up {count} files", "files_cleaned": count}

@@ -57,6 +57,6 @@ format:
 	ruff format .
 
 clean:
-	python3 cleanup.py
+	python3 -c "from main import cleanup_files; cleanup_files()"
 	rm -rf .pytest_cache .ruff_cache
 	find . -type d -name "__pycache__" -prune -exec rm -rf {} +
