@@ -93,22 +93,6 @@ Open <http://localhost:5050>.
 
 Paste into the Create tab → *Parse workflow* → *Generate Python code* → *Run*.
 
-## API
-
-| Method | Path | Purpose |
-|---|---|---|
-| `GET`  | `/api/tools` | List available tools and parameters |
-| `GET`  | `/api/examples` | Built-in example workflows |
-| `POST` | `/api/parse-workflow` | Parse text into structured steps |
-| `POST` | `/api/parse-video` | Extract steps from an uploaded video |
-| `POST` | `/api/generate-workflow` | Generate a Python script from parsed steps |
-| `POST` | `/api/check-requirements` | Report which credentials a run will need |
-| `POST` | `/api/run-workflow` | Run a workflow (blocking) |
-| `POST` | `/api/run-workflow/stream` | Run and stream output via SSE |
-| `POST` | `/api/cleanup` | Wipe generated scripts and temp outputs |
-
-Every POST endpoint accepts a `credentials` object; values are injected into the subprocess environment and never written to disk.
-
 ## Development
 
 ```bash
