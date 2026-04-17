@@ -6,14 +6,14 @@
 
 Turn natural-language descriptions — or screen-capture videos — into runnable Python workflows.
 
-WorkflowMVP uses an online LLM provider (Gemini, Groq, or OpenRouter) to parse/generate workflow code, uses a built-in tool registry (file I/O, HTTP, CSV/JSON, SQLite, email, compression, …), and runs everything in a sandboxed directory with live output streamed back to the browser.
+WorkflowMVP uses an online LLM provider (Gemini, Groq, or OpenRouter) to parse/generate workflow code, uses a built-in tool registry (file I/O, HTTP requests, AI text generation, stock prices, CSV/JSON, SQLite, email, compression, …), and runs everything in a sandboxed directory with live output streamed back to the browser.
 
 ---
 
 ## Highlights
 
 - Text workflows or screen-recording videos → executable Python.
-- 20+ built-in tools: files, CSV/JSON, HTTP, SQLite, compression, email, notifications, subprocess.
+- 25+ built-in tools: files, CSV/JSON, HTTP requests, stock prices, AI text generation, SQLite, compression, email, notifications, subprocess.
 - Browser UI with tabs, dark-mode-aware styling, and live (SSE) run output.
 - Credentials in **Settings** (stored only in your browser's `sessionStorage`) or `.env` — never written to disk server-side.
 - Runs are sandboxed under `data/temp_outputs/<run_id>/` and cleaned up on server shutdown (or via `/api/cleanup`).
@@ -154,7 +154,7 @@ workflowMVP/
 ├── workflowmvp/
 │   ├── parser.py           # numbered-text -> structured steps
 │   ├── agent.py            # provider-backed code generator
-│   ├── tools.py            # ToolRegistry (20+ tools)
+│   ├── tools.py            # ToolRegistry (25+ tools: http_request, generate_text, fetch_stock_price, …)
 │   └── video_to_workflow.py# frame sampling + Gemini vision analysis
 ├── web/
 │   ├── templates/index.html
@@ -201,5 +201,7 @@ MIT — see [LICENSE](LICENSE) (add one if missing).
 ## Acknowledgements
 
 - [Google Gemini](https://ai.google.dev/) for text + vision generation.
+- [Groq](https://groq.com/) and [OpenRouter](https://openrouter.ai/) for alternative LLM providers.
+- [yfinance](https://github.com/ranaroussi/yfinance) for stock/index price data.
 - [Flask](https://flask.palletsprojects.com/) for the web server.
 - [OpenCV](https://opencv.org/) for frame sampling.

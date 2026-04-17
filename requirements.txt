@@ -4,3 +4,4 @@ requests>=2.28.0
 python-dotenv>=1.0.0
 opencv-python>=4.9.0.80
 flask>=2.3.0
+yfinance>=0.2.0
