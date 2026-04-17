@@ -6,45 +6,31 @@
 
 Turn natural-language descriptions — or screen-capture videos — into runnable Python workflows.
 
-WorkflowMVP uses an online LLM provider (Gemini, Groq, or OpenRouter) to parse/generate workflow code, uses a built-in tool registry (file I/O, HTTP requests, AI text generation, stock prices, CSV/JSON, SQLite, email, compression, …), and runs everything in a sandboxed directory with live output streamed back to the browser.
+WorkflowMVP uses an online LLM (Gemini, Groq, or OpenRouter) to parse descriptions and generate executable Python, backed by a built-in tool registry covering HTTP requests, AI text generation, stock prices, file I/O, email, CSV/JSON, SQLite, compression, and more. Everything runs in a sandboxed directory with live output streamed to the browser.
+
+---
+
+## Quick start
+
+```bash
+git clone https://github.com/KMeltzer24/workflowMVP.git
+cd workflowMVP
+pip install -r requirements.txt
+cp .env.example .env   # add your API key
+make run               # open http://localhost:5050
+```
 
 ---
 
 ## Highlights
 
-- Text workflows or screen-recording videos → executable Python.
-- 25+ built-in tools: files, CSV/JSON, HTTP requests, stock prices, AI text generation, SQLite, compression, email, notifications, subprocess.
-- Browser UI with tabs, dark-mode-aware styling, and live (SSE) run output.
-- Credentials in **Settings** (stored only in your browser's `sessionStorage`) or `.env` — never written to disk server-side.
-- Runs are sandboxed under `data/temp_outputs/<run_id>/` and cleaned up on server shutdown (or via `/api/cleanup`).
-- Hybrid parsing: deterministic parser first, optional AI assist only for low-confidence parses.
-- Tool safety profile: sandboxed paths + blocked shell commands in default safe mode.
+- Text descriptions or screen-recording videos → executable Python.
+- 25+ built-in tools including `http_request`, `generate_text`, and `fetch_stock_price`.
+- Browser UI with tabs, live streaming output, save/load workflows, and inline credential prompts.
+- Credentials stay in your browser's `sessionStorage` or `.env` — never written to disk server-side.
+- Hybrid parsing: rule-based first, AI assist only when confidence is low.
+- Tool safety profile: sandboxed file paths and blocked dangerous shell commands by default.
 - Pytest suite + GitHub Actions CI (ruff + pytest on Python 3.9 & 3.11).
-
-## Architecture
-
-```mermaid
-flowchart LR
-    Browser[Browser UI]
-    Flask[Flask API]
-    Parser[WorkflowParser]
-    Agent["WorkflowAgent (Provider API)"]
-    Gen["data/generated_workflows/*.py"]
-    Runner["python3 workflow.py"]
-    Tools[workflowmvp.tools ToolRegistry]
-    Temp["data/temp_outputs/run_id/"]
-
-    Browser -- "text / video + creds" --> Flask
-    Flask -- parse --> Parser
-    Flask -- generate --> Agent
-    Agent -- writes --> Gen
-    Flask -- subprocess --> Runner
-    Runner -- uses --> Tools
-    Runner -- outputs --> Temp
-    Flask -- "SSE stream" --> Browser
-    Flask -- "shutdown/manual cleanup" --> Gen
-    Flask -- "shutdown/manual cleanup" --> Temp
-```
 
 ## Install
 
@@ -54,121 +40,107 @@ Requires Python 3.9+.
 git clone https://github.com/KMeltzer24/workflowMVP.git
 cd workflowMVP
 pip install -r requirements.txt
-cp .env.example .env        # optional – credentials can be set via the UI
+cp .env.example .env
 ```
 
-Set provider credentials in `.env`:
-- `LLM_PROVIDER=gemini|groq|openrouter`
-- matching API key (`GEMINI_API_KEY`, `GROQ_API_KEY`, or `OPENROUTER_API_KEY`)
+Set your LLM provider credentials in `.env`:
 
-`/api/parse-video` is Gemini-only and still requires `GEMINI_API_KEY`.
+```
+LLM_PROVIDER=gemini          # or groq, openrouter
+GEMINI_API_KEY=your_key_here
+```
+
+Video parsing always requires `GEMINI_API_KEY` even if another provider is used for code generation.
 
 ## Run
 
 ```bash
-python3 main.py                       # production mode (default port 5050)
-python3 main.py --debug               # Flask debug + auto-reload
-python3 main.py --port 5001           # pick a different port
-PORT=5001 python3 main.py             # via environment variable
-LLM_PROVIDER=groq python3 main.py     # switch LLM provider
-```
-
-Makefile equivalents:
-
-```bash
-make run                  # default: Gemini
+make run                  # Gemini (default), port 5050
 make run PROVIDER=2       # Groq
 make run PROVIDER=3       # OpenRouter
-make debug                # debug mode (Gemini)
-make debug PROVIDER=2     # debug mode (Groq)
+make debug                # debug mode with auto-reload
 ```
 
-Then open <http://localhost:5050> (or whichever port you picked).
-
-> **macOS note:** the default port is 5050 because macOS AirPlay Receiver claims port 5000. If you'd rather free up 5000, disable AirPlay Receiver under **System Settings → General → AirDrop & Handoff**.
-
-### Makefile shortcuts
+Or directly:
 
 ```bash
-make install   # runtime deps
-make dev       # dev deps (pytest, ruff)
-make run       # start the web UI (Gemini default)
-make run PROVIDER=2   # Groq
-make run PROVIDER=3   # OpenRouter
-make test      # run the test suite
-make lint      # ruff check
-make clean     # wipe generated scripts + temp outputs
+python3 main.py
+python3 main.py --port 5001
+python3 main.py --debug
+LLM_PROVIDER=groq python3 main.py
 ```
+
+Open <http://localhost:5050>.
+
+> **macOS:** port 5050 is used by default because macOS AirPlay Receiver occupies port 5000.
 
 ## Using the web UI
 
-1. **Create** tab — write a numbered workflow or upload a screen-capture video; click *Parse*. Edit any parsed step inline before generating code.
-2. **Generate Python code** — sends the steps to the configured provider and writes a script into `data/generated_workflows/`.
-3. **Run** tab — executes the generated script in an isolated `data/temp_outputs/<run_id>/` directory. Output streams live via Server-Sent Events. Artifacts persist during the server session and are removed on shutdown (or via `/api/cleanup`).
-4. **Examples** tab — four self-contained examples (one requires SMTP credentials to demonstrate the inline creds prompt).
-5. **Tools** tab — browse every tool exposed to generated code.
-6. **Settings** (top right) — enter Gemini/SMTP credentials for browser-session overrides. Provider selection + Groq/OpenRouter keys are configured via `.env` or command-line env vars.
+1. **Create** tab — write a numbered workflow or upload a screen-capture video, then click *Parse*. Edit any step inline before generating.
+2. **Generate Python code** — sends the parsed steps to the configured LLM and writes a script to `data/generated_workflows/`.
+3. **Run** tab — executes the script in a sandboxed `data/temp_outputs/<run_id>/` directory. Output streams live. Artifacts persist until server shutdown or `/api/cleanup`.
+4. **Examples** tab — four ready-to-run workflows, including one that demonstrates the inline SMTP credential prompt.
+5. **Tools** tab — browse every tool available to generated code.
+6. **Settings** — enter Gemini/SMTP credentials for the browser session. Provider keys (Groq/OpenRouter) are set via `.env`.
 
 ## Example workflow
 
 ```
-1. Write the text "name,age\nAlice,30\nBob,25\nCarol,41\nDan,29" to file "users.csv"
-2. Read the CSV file "users.csv"
-3. Calculate the average age of users
-4. Write a summary to file "report.txt"
-5. Send notification with title "Pipeline" and message "Report generated"
+1. Fetch the current S&P 500 price
+2. Write a short poem about the price
+3. Email the poem to me@example.com
 ```
 
-Paste it into the Create tab, click *Parse workflow*, then *Generate Python code*, then *Run*. Outputs land in `data/temp_outputs/<run_id>/` and persist until shutdown/manual cleanup.
+Paste into the Create tab → *Parse workflow* → *Generate Python code* → *Run*.
 
 ## API
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET`  | `/api/tools` | List available tools + parameters. |
-| `GET`  | `/api/examples` | Built-in example workflows (with `requires_credentials`). |
-| `POST` | `/api/parse-workflow` | Parse numbered text into steps. |
-| `POST` | `/api/parse-video` | Extract steps from an uploaded video (multipart). |
-| `POST` | `/api/generate-workflow` | Generate a Python script from parsed steps. |
-| `POST` | `/api/check-requirements` | Report which env vars the run will need. |
-| `POST` | `/api/run-workflow` | Run a generated workflow (blocking). |
-| `POST` | `/api/run-workflow/stream` | Run and stream stdout via SSE. |
-| `POST` | `/api/cleanup` | Wipe generated scripts + temp outputs. |
+| `GET`  | `/api/tools` | List available tools and parameters |
+| `GET`  | `/api/examples` | Built-in example workflows |
+| `POST` | `/api/parse-workflow` | Parse text into structured steps |
+| `POST` | `/api/parse-video` | Extract steps from an uploaded video |
+| `POST` | `/api/generate-workflow` | Generate a Python script from parsed steps |
+| `POST` | `/api/check-requirements` | Report which credentials a run will need |
+| `POST` | `/api/run-workflow` | Run a workflow (blocking) |
+| `POST` | `/api/run-workflow/stream` | Run and stream output via SSE |
+| `POST` | `/api/cleanup` | Wipe generated scripts and temp outputs |
 
-Every POST endpoint accepts a `credentials` object in the body; values are injected into the subprocess environment and never written to disk.
+Every POST endpoint accepts a `credentials` object; values are injected into the subprocess environment and never written to disk.
 
 ## Development
 
 ```bash
 pip install -r requirements-dev.txt
-pytest          # unit + API + end-to-end tests
+pytest          # run all tests
 ruff check .    # lint
+make clean      # wipe generated scripts, temp outputs, and caches
 ```
 
 ### Project layout
 
 ```
 workflowMVP/
-├── main.py                 # Flask app, subprocess runner, SSE streaming, cleanup
-├── cleanup.py              # cleanup_files() for generated + temp outputs
+├── main.py                  # Flask app, subprocess runner, SSE streaming, cleanup
 ├── workflowmvp/
-│   ├── parser.py           # numbered-text -> structured steps
-│   ├── agent.py            # provider-backed code generator
-│   ├── tools.py            # ToolRegistry (25+ tools: http_request, generate_text, fetch_stock_price, …)
-│   └── video_to_workflow.py# frame sampling + Gemini vision analysis
+│   ├── parser.py            # rule-based text → structured steps
+│   ├── agent.py             # LLM-backed code generator (multi-provider)
+│   ├── tools.py             # ToolRegistry: 25+ tools
+│   └── video_to_workflow.py # frame sampling + Gemini vision analysis
 ├── web/
 │   ├── templates/index.html
 │   └── static/
 │       ├── css/style.css
 │       └── js/app.js
-├── tests/                  # pytest suites
+├── tests/
 ├── .github/workflows/ci.yml
 ├── pyproject.toml
 ├── Makefile
 └── .env.example
 ```
 
-### Extending the tool registry
+### Adding a tool
 
 ```python
 from workflowmvp.tools import Tool, ToolRegistry
@@ -177,31 +149,29 @@ def my_tool(param: str) -> dict:
     return {"success": True, "result": param.upper()}
 
 registry = ToolRegistry()
-registry.register_tool(
-    Tool(
-        name="shout",
-        description="Uppercase a string.",
-        function=my_tool,
-        parameters={"param": "String to uppercase"},
-    )
-)
+registry.register_tool(Tool(
+    name="shout",
+    description="Uppercase a string.",
+    function=my_tool,
+    parameters={"param": "String to uppercase"},
+))
 ```
 
 ## Troubleshooting
 
-- **"Missing provider API key"** — set `LLM_PROVIDER` and matching key in `.env` (`GEMINI_API_KEY`, `GROQ_API_KEY`, or `OPENROUTER_API_KEY`).
-- **Email run fails with "Missing SMTP credentials"** — click *Settings* and fill in `EMAIL_USER`, `EMAIL_PASSWORD`, `EMAIL_FROM`. For Gmail, use an [App Password](https://myaccount.google.com/apppasswords).
-- **Video parse returns no steps** — re-record with slower, clearer UI interactions or boost `max_frames` in `workflowmvp/video_to_workflow.py`.
-- **"Workflow file not found"** — verify the path still exists under `data/generated_workflows/`; artifacts are removed on shutdown/cleanup.
+- **"Missing provider API key"** — set `LLM_PROVIDER` and the matching key in `.env` (`GEMINI_API_KEY`, `GROQ_API_KEY`, or `OPENROUTER_API_KEY`).
+- **Email fails with "Missing SMTP credentials"** — open *Settings* and fill in `EMAIL_USER`, `EMAIL_PASSWORD`, and `EMAIL_FROM`. Works with any SMTP provider: Gmail (needs an [App Password](https://myaccount.google.com/apppasswords)), Outlook (`smtp-mail.outlook.com:587`), Yahoo (`smtp.mail.yahoo.com:587`), or any custom SMTP server — set `SMTP_SERVER` and `SMTP_PORT` in `.env` accordingly.
+- **Video parse returns no steps** — re-record with slower, clearer interactions or increase `max_frames` in `workflowmvp/video_to_workflow.py`.
+- **"Workflow file not found"** — the file was likely removed by a previous cleanup. Regenerate the workflow and run again.
 
 ## License
 
-MIT — see [LICENSE](LICENSE) (add one if missing).
+MIT
 
 ## Acknowledgements
 
-- [Google Gemini](https://ai.google.dev/) for text + vision generation.
+- [Google Gemini](https://ai.google.dev/) for text and vision generation.
 - [Groq](https://groq.com/) and [OpenRouter](https://openrouter.ai/) for alternative LLM providers.
-- [yfinance](https://github.com/ranaroussi/yfinance) for stock/index price data.
+- [yfinance](https://github.com/ranaroussi/yfinance) for stock and index price data.
 - [Flask](https://flask.palletsprojects.com/) for the web server.
-- [OpenCV](https://opencv.org/) for frame sampling.
+- [OpenCV](https://opencv.org/) for video frame sampling.
