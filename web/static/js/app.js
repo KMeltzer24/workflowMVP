@@ -335,18 +335,45 @@ function saveStep(index) {
     }
     state.parsedSteps[index].description = value;
     state.stepsEdited = true;
-    const row = document.querySelector(`#step-display-${index} .step-description`);
-    row.textContent = value;
-    toggleEdit(index);
-    const generateBtn = document.getElementById("generateBtn");
-    generateBtn.textContent = "Generate Python code (modified)";
-    toast(`Updated step ${index + 1}`, "success");
+    reparseStep(index, value)
+        .finally(() => {
+            const row = document.querySelector(`#step-display-${index} .step-description`);
+            row.textContent = value;
+            const meta = document.querySelector(`#step-display-${index} .step-meta`);
+            if (meta) {
+                const step = state.parsedSteps[index];
+                meta.innerHTML = `Action: ${escapeHtml(step.action)} &middot; Depends on: ${
+                    step.dependencies.length ? escapeHtml(step.dependencies.join(", ")) : "none"
+                }`;
+            }
+            toggleEdit(index);
+            const generateBtn = document.getElementById("generateBtn");
+            generateBtn.textContent = "Generate Python code (modified)";
+            toast(`Updated step ${index + 1}`, "success");
+        });
 }
 
 function cancelEdit(index) {
     document.getElementById(`edit-desc-${index}`).value =
         state.parsedSteps[index].description;
     toggleEdit(index);
+}
+
+async function reparseStep(index, description) {
+    try {
+        const response = await fetch("/api/parse-single-step", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ description }),
+        });
+        const data = await response.json();
+        if (data.success) {
+            state.parsedSteps[index].action = data.action || state.parsedSteps[index].action;
+            state.parsedSteps[index].parameters = data.parameters || state.parsedSteps[index].parameters;
+        }
+    } catch (_) {
+        // Non-fatal: keep edited description even if re-parse fails.
+    }
 }
 
 // -------------------- Generate --------------------

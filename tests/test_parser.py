@@ -58,3 +58,20 @@ def test_confidence_flags_custom_heavy_parse(parser: WorkflowParser) -> None:
     confidence = parser.assess_parse_confidence(steps)
     assert confidence["needs_ai_assist"] is True
     assert confidence["score"] < 0.55
+
+
+def test_parses_step_number_and_description_on_next_line(
+    parser: WorkflowParser,
+) -> None:
+    text = """
+    1.
+    Download https://example.com/data.json
+    2.
+    Write the text "ok" to file "out.txt"
+    """.strip()
+    steps = parser.parse_workflow(text)
+    assert len(steps) == 2
+    assert steps[0].action == "download"
+    assert steps[0].parameters.get("url") == "https://example.com/data.json"
+    assert steps[1].action == "write_file"
+    assert steps[1].parameters.get("file_path") == "out.txt"

@@ -46,6 +46,18 @@ def test_parse_workflow_endpoint(client) -> None:
     assert payload["steps"][0]["action"] == "wait"
 
 
+def test_parse_single_step_endpoint(client) -> None:
+    response = client.post(
+        "/api/parse-single-step",
+        json={"description": 'Write "hi" to file "note.txt"'},
+    )
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["success"] is True
+    assert payload["action"] == "write_file"
+    assert payload["parameters"]["file_path"] == "note.txt"
+
+
 def test_check_requirements_reports_missing_email_creds(
     client, monkeypatch: pytest.MonkeyPatch
 ) -> None:

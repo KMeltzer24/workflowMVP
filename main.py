@@ -331,6 +331,28 @@ def parse_workflow():
         return jsonify({"success": False, "error": str(exc)})
 
 
+@app.route("/api/parse-single-step", methods=["POST"])
+def parse_single_step():
+    """Parse a single edited step description into action/parameters."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        description = (payload.get("description") or "").strip()
+        if not description:
+            return jsonify({"success": False, "error": "No description provided"})
+
+        parser = WorkflowParser()
+        action, parameters = parser._extract_action_and_params(description)
+        return jsonify(
+            {
+                "success": True,
+                "action": action,
+                "parameters": parameters,
+            }
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        return jsonify({"success": False, "error": str(exc)})
+
+
 @app.route("/api/parse-video", methods=["POST"])
 def parse_video():
     """Extract frames from an uploaded video and infer a workflow."""

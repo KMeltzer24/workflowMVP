@@ -50,9 +50,12 @@ class WorkflowParser:
         current_step = None
         step_counter = 1
 
-        for line in lines:
-            line = line.strip()
+        i = 0
+        while i < len(lines):
+            raw_line = lines[i]
+            line = raw_line.strip()
             if not line:
+                i += 1
                 continue
 
             # Check if this is a new step
@@ -62,6 +65,11 @@ class WorkflowParser:
 
                 step_id = f"step_{step_counter}"
                 description = self._extract_description(line)
+                if not description and i + 1 < len(lines):
+                    next_line = lines[i + 1].strip()
+                    if next_line and not self._is_step_start(next_line):
+                        description = next_line
+                        i += 1
                 action, parameters = self._extract_action_and_params(description)
 
                 current_step = WorkflowStep(
@@ -72,12 +80,16 @@ class WorkflowParser:
                     dependencies=[]
                 )
                 step_counter += 1
-            elif current_step and line.startswith(('  ', '\t')):
+                i += 1
+            elif current_step and (raw_line.startswith(('  ', '\t')) or not self._is_step_start(line)):
                 # This is a continuation or parameter of the current step
                 current_step.description += f" {line.strip()}"
                 action, params = self._extract_action_and_params(current_step.description)
                 current_step.action = action
                 current_step.parameters.update(params)
+                i += 1
+            else:
+                i += 1
 
         if current_step:
             steps.append(current_step)
