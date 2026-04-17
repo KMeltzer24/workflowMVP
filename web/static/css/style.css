@@ -378,6 +378,25 @@ button.ghost:hover {
     margin-top: 6px;
 }
 
+.parse-insights {
+    margin-bottom: 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-alt);
+    padding: 10px 12px;
+    font-size: 13px;
+}
+
+.parse-insights strong {
+    color: var(--text);
+}
+
+.parse-insights .hint {
+    color: var(--text-muted);
+    margin-top: 4px;
+    font-size: 12px;
+}
+
 .edit-description {
     width: 100%;
     min-height: 70px;
@@ -471,6 +490,21 @@ button.ghost:hover {
     max-height: 380px;
     overflow: auto;
     padding-right: 4px;
+}
+
+.tool-controls {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+#toolSearchInput {
+    flex: 1 1 320px;
+}
+
+#toolCategorySelect {
+    flex: 0 0 220px;
 }
 
 /* Run terminal */
@@ -669,5 +703,12 @@ video {
     }
     .select {
         max-width: unset;
+    }
+    .tool-controls {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    #toolCategorySelect {
+        flex: 1 1 auto;
     }
 }

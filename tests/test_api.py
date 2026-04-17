@@ -44,6 +44,9 @@ def test_parse_workflow_endpoint(client) -> None:
     payload = response.get_json()
     assert payload["success"] is True
     assert payload["steps"][0]["action"] == "wait"
+    assert "parse_confidence" in payload
+    assert "score" in payload["parse_confidence"]
+    assert "ai_assisted" in payload
 
 
 def test_parse_single_step_endpoint(client) -> None:

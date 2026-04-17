@@ -410,11 +410,14 @@ def parse_video():
 
         parser = WorkflowParser()
         steps = parser.parse_workflow(workflow_text)
+        confidence = parser.assess_parse_confidence(steps)
         return jsonify(
             {
                 "success": True,
                 "steps": [_step_to_dict(s) for s in steps],
                 "workflow_text": workflow_text,
+                "parse_confidence": confidence,
+                "ai_assisted": False,
             }
         )
     except Exception as exc:

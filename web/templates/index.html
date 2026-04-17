@@ -73,6 +73,7 @@
                     <h2>Parsed steps</h2>
                     <span class="pill" id="stepCountPill">0 steps</span>
                 </div>
+                <div id="parseInsights" class="parse-insights hidden" aria-live="polite"></div>
                 <div id="parsedSteps"></div>
                 <div class="actions">
                     <button class="primary" id="generateBtn" type="button" disabled>Generate Python code</button>
@@ -110,6 +111,12 @@
                 <div class="panel-header">
                     <h2>Available tools</h2>
                     <span id="toolCountPill" class="pill">0 tools</span>
+                </div>
+                <div class="tool-controls">
+                    <input id="toolSearchInput" type="text" placeholder="Search tools by name, description, or parameter...">
+                    <select id="toolCategorySelect" class="select">
+                        <option value="all">All categories</option>
+                    </select>
                 </div>
                 <div id="tools" class="cards tool-cards"></div>
             </div>

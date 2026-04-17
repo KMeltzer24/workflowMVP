@@ -23,6 +23,9 @@ const state = {
     currentWorkflowPath: null,
     stepsEdited: false,
     streaming: false,
+    parseConfidence: null,
+    parseAiAssisted: false,
+    tools: [],
 };
 
 // -------------------- Credentials --------------------
@@ -118,26 +121,75 @@ async function loadTools() {
     try {
         const response = await fetch("/api/tools");
         const tools = await response.json();
-        const host = document.getElementById("tools");
-        host.innerHTML = "";
-        for (const tool of tools) {
-            const card = document.createElement("div");
-            card.className = "card";
-            card.innerHTML = `
-                <h3>${escapeHtml(tool.name)}</h3>
-                <p>${escapeHtml(tool.description || "")}</p>
-                <p class="muted" style="margin-top:8px"><code>${
-                    Object.keys(tool.parameters || {})
-                        .map(escapeHtml)
-                        .join(", ") || "(no parameters)"
-                }</code></p>
-            `;
-            host.appendChild(card);
-        }
-        document.getElementById("toolCountPill").textContent = `${tools.length} tools`;
+        state.tools = Array.isArray(tools) ? tools : [];
+        buildToolCategoryOptions(state.tools);
+        renderTools();
     } catch (err) {
         toast(`Could not load tools: ${err.message}`, "error");
     }
+}
+
+function buildToolCategoryOptions(tools) {
+    const select = document.getElementById("toolCategorySelect");
+    if (!select) return;
+    const categories = new Set(["all"]);
+    for (const tool of tools) {
+        categories.add(toolCategory(tool.name));
+    }
+    const ordered = Array.from(categories).sort();
+    select.innerHTML = "";
+    for (const category of ordered) {
+        const option = document.createElement("option");
+        option.value = category;
+        option.textContent = category === "all" ? "All categories" : category;
+        select.appendChild(option);
+    }
+}
+
+function renderTools() {
+    const host = document.getElementById("tools");
+    if (!host) return;
+    const search = (document.getElementById("toolSearchInput").value || "")
+        .trim()
+        .toLowerCase();
+    const category = document.getElementById("toolCategorySelect").value || "all";
+    const filtered = state.tools.filter((tool) => {
+        const params = Object.keys(tool.parameters || {}).join(" ").toLowerCase();
+        const haystack = `${tool.name || ""} ${tool.description || ""} ${params}`.toLowerCase();
+        const matchesSearch = !search || haystack.includes(search);
+        const matchesCategory = category === "all" || toolCategory(tool.name) === category;
+        return matchesSearch && matchesCategory;
+    });
+
+    host.innerHTML = "";
+    for (const tool of filtered) {
+        const card = document.createElement("div");
+        card.className = "card";
+        card.innerHTML = `
+            <h3>${escapeHtml(tool.name)}</h3>
+            <p>${escapeHtml(tool.description || "")}</p>
+            <p class="muted" style="margin-top:8px"><code>${
+                Object.keys(tool.parameters || {})
+                    .map(escapeHtml)
+                    .join(", ") || "(no parameters)"
+            }</code></p>
+        `;
+        host.appendChild(card);
+    }
+    document.getElementById("toolCountPill").textContent =
+        `${filtered.length} / ${state.tools.length} tools`;
+}
+
+function toolCategory(name) {
+    const n = String(name || "").toLowerCase();
+    if (n.includes("email") || n.includes("notification")) return "communication";
+    if (n.includes("csv") || n.includes("json") || n.includes("analyze")) return "data";
+    if (n.includes("sqlite") || n.includes("query")) return "database";
+    if (n.includes("download") || n.includes("scrape")) return "network";
+    if (n.includes("compress") || n.includes("archive")) return "archive";
+    if (n.includes("file") || n.includes("directory")) return "filesystem";
+    if (n.includes("command") || n.includes("wait")) return "system";
+    return "general";
 }
 
 async function loadExamples() {
@@ -216,7 +268,10 @@ async function parseTextWorkflow(text) {
         }
         state.parsedSteps = data.steps;
         state.stepsEdited = false;
+        state.parseConfidence = data.parse_confidence || null;
+        state.parseAiAssisted = Boolean(data.ai_assisted);
         displaySteps(data.steps);
+        renderParseInsights();
         enableGenerate(true);
         if (data.ai_assisted) {
             toast(
@@ -260,7 +315,10 @@ async function parseVideoWorkflow(videoFile) {
         }
         state.parsedSteps = data.steps;
         state.stepsEdited = false;
+        state.parseConfidence = data.parse_confidence || null;
+        state.parseAiAssisted = Boolean(data.ai_assisted);
         displaySteps(data.steps);
+        renderParseInsights();
         enableGenerate(true);
         toast(`Parsed ${data.steps.length} steps from video`, "success");
     } catch (err) {
@@ -349,6 +407,7 @@ function saveStep(index) {
             toggleEdit(index);
             const generateBtn = document.getElementById("generateBtn");
             generateBtn.textContent = "Generate Python code (modified)";
+            markParseInsightsStale();
             toast(`Updated step ${index + 1}`, "success");
         });
 }
@@ -376,6 +435,39 @@ async function reparseStep(index, description) {
     }
 }
 
+function renderParseInsights() {
+    const box = document.getElementById("parseInsights");
+    if (!box) return;
+    const c = state.parseConfidence;
+    if (!c) {
+        box.classList.add("hidden");
+        box.innerHTML = "";
+        return;
+    }
+    const scorePct = Math.round(Number(c.score || 0) * 100);
+    const mode = state.parseAiAssisted ? "AI-assisted" : "Rule-first";
+    const reasons = Array.isArray(c.reasons) ? c.reasons.slice(0, 3) : [];
+    box.innerHTML = `
+        <strong>Parse quality:</strong> ${scorePct}% (${mode})
+        <div class="hint">Custom steps: ${c.custom_steps || 0}, missing-param steps: ${c.missing_param_steps || 0}</div>
+        ${
+            reasons.length
+                ? `<div class="hint">${reasons.map(escapeHtml).join(" | ")}</div>`
+                : ""
+        }
+    `;
+    box.dataset.stale = "0";
+    box.classList.remove("hidden");
+}
+
+function markParseInsightsStale() {
+    const box = document.getElementById("parseInsights");
+    if (!box || box.classList.contains("hidden")) return;
+    if (box.dataset.stale === "1") return;
+    box.dataset.stale = "1";
+    box.innerHTML += '<div class="hint">Step descriptions were edited manually; re-parse for refreshed confidence.</div>';
+}
+
 // -------------------- Generate --------------------
 
 async function generateWorkflow() {
@@ -396,11 +488,8 @@ async function generateWorkflow() {
         });
         const data = await response.json();
         if (!data.success) {
-            if (
-                Array.isArray(data.missing_requirements) &&
-                data.missing_requirements.includes("GEMINI_API_KEY")
-            ) {
-                toast("Gemini API key required — open Settings", "warning");
+            if (Array.isArray(data.missing_requirements) && data.missing_requirements.length) {
+                toast(`Missing ${data.missing_requirements.join(", ")} — open Settings`, "warning");
                 openSettings();
                 return;
             }
@@ -694,6 +783,8 @@ document.getElementById("runBtn").addEventListener("click", runWorkflow);
 document.getElementById("clearLogsBtn").addEventListener("click", () => {
     document.getElementById("runOutput").innerHTML = "";
 });
+document.getElementById("toolSearchInput").addEventListener("input", renderTools);
+document.getElementById("toolCategorySelect").addEventListener("change", renderTools);
 document
     .querySelectorAll("input[name='inputType']")
     .forEach((radio) => radio.addEventListener("change", toggleInputType));

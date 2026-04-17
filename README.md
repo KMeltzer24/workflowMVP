@@ -73,6 +73,16 @@ PORT=5001 python3 main.py             # via environment variable
 LLM_PROVIDER=groq python3 main.py     # switch LLM provider
 ```
 
+Makefile equivalents:
+
+```bash
+make run                  # default: Gemini
+make run PROVIDER=2       # Groq
+make run PROVIDER=3       # OpenRouter
+make debug                # debug mode (Gemini)
+make debug PROVIDER=2     # debug mode (Groq)
+```
+
 Then open <http://localhost:5050> (or whichever port you picked).
 
 > **macOS note:** the default port is 5050 because macOS AirPlay Receiver claims port 5000. If you'd rather free up 5000, disable AirPlay Receiver under **System Settings → General → AirDrop & Handoff**.
