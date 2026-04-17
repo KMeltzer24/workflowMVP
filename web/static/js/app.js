@@ -182,12 +182,15 @@ function renderTools() {
 
 function toolCategory(name) {
     const n = String(name || "").toLowerCase();
+    if (n === "generate_text") return "ai";
+    if (n === "fetch_stock_price") return "finance";
+    if (n === "http_request") return "network";
     if (n.includes("email") || n.includes("notification")) return "communication";
-    if (n.includes("csv") || n.includes("json") || n.includes("analyze")) return "data";
-    if (n.includes("sqlite") || n.includes("query")) return "database";
+    if (n.includes("csv") || n.includes("json") || n.includes("analyze") || n.includes("process_data")) return "data";
+    if (n.includes("sqlite") || n.includes("query") || n.includes("insert")) return "database";
     if (n.includes("download") || n.includes("scrape")) return "network";
     if (n.includes("compress") || n.includes("archive")) return "archive";
-    if (n.includes("file") || n.includes("directory")) return "filesystem";
+    if (n.includes("file") || n.includes("directory") || n.includes("copy") || n.includes("move") || n.includes("delete") || n.includes("read") || n.includes("write") || n.includes("list")) return "filesystem";
     if (n.includes("command") || n.includes("wait")) return "system";
     return "general";
 }
@@ -204,16 +207,20 @@ async function loadExamples() {
             const needs = Array.isArray(example.requires_credentials)
                 ? example.requires_credentials
                 : [];
+            const stepCount = (example.workflow || "").split("\n").filter(l => /^\d+\./.test(l.trim())).length;
             card.innerHTML = `
-                <h3>${escapeHtml(example.name)}</h3>
+                <div class="card-title-row">
+                    <h3>${escapeHtml(example.name)}</h3>
+                    <span class="pill">${stepCount} step${stepCount !== 1 ? "s" : ""}</span>
+                </div>
                 <p>${escapeHtml(example.description || "")}</p>
-                ${
-                    needs.length
-                        ? `<span class="badge">Needs: ${needs
-                              .map(escapeHtml)
-                              .join(", ")}</span>`
-                        : ""
-                }
+                <div class="card-badges">
+                    ${needs.length
+                        ? `<span class="badge badge-warn">Needs: ${needs.map(escapeHtml).join(", ")}</span>`
+                        : `<span class="badge badge-ok">No credentials needed</span>`
+                    }
+                    <span class="badge badge-action">Click to load →</span>
+                </div>
             `;
             card.addEventListener("click", () => {
                 document.getElementById("workflowText").value = example.workflow;
@@ -221,6 +228,7 @@ async function loadExamples() {
                 toggleInputType();
                 activateTab("create");
                 parseWorkflow();
+                toast(`Loaded: ${example.name}`, "success");
             });
             host.appendChild(card);
         }

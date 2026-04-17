@@ -267,6 +267,39 @@ def _examples() -> List[Dict[str, str]]:
             ),
             "requires_credentials": ACTION_REQUIREMENTS["send_email"],
         },
+        {
+            "name": "S&P 500 Haiku",
+            "description": "Fetch the current S&P 500 price, write a haiku about it using AI, and save it to a file.",
+            "workflow": (
+                "1. Fetch the current price of the S&P 500 (ticker ^GSPC)\n"
+                "2. Write a haiku about the S&P 500 price\n"
+                "3. Write the haiku to file \"sp500_haiku.txt\"\n"
+                "4. Send notification with title \"S&P 500\" and message \"Haiku saved\""
+            ),
+            "requires_credentials": [],
+        },
+        {
+            "name": "SPY 5-Day Change",
+            "description": "Compare SPY's current price to 5 trading days ago and save the result.",
+            "workflow": (
+                "1. Fetch SPY price history for the past 5 days\n"
+                "2. Calculate the dollar and percentage change over the 5 days\n"
+                "3. Write a summary of the change to file \"spy_change.txt\"\n"
+                "4. Send notification with title \"SPY\" and message \"Change report saved\""
+            ),
+            "requires_credentials": [],
+        },
+        {
+            "name": "Webpage Summariser",
+            "description": "Scrape any public webpage, summarise the content with AI, and save the summary.",
+            "workflow": (
+                "1. Scrape the webpage https://en.wikipedia.org/wiki/Python_(programming_language)\n"
+                "2. Write a concise 3-sentence summary of the page content\n"
+                "3. Write the summary to file \"summary.txt\"\n"
+                "4. Send notification with title \"Summary\" and message \"Done\""
+            ),
+            "requires_credentials": [],
+        },
     ]
 
 

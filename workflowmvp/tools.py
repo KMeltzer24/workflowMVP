@@ -889,18 +889,20 @@ class ToolRegistry:
             return {"success": False, "error": str(e)}
 
     # Web scraping (basic implementation)
+    _SCRAPE_MAX_CHARS = 4000  # keep payloads well inside LLM context limits
+
     def _scrape_webpage(self, url: str, selector: Optional[str] = None, extract_text: bool = True) -> Dict[str, Any]:
-        """Scrape content from webpage"""
+        """Scrape content from webpage, truncating to _SCRAPE_MAX_CHARS to avoid
+        overflowing LLM context windows when the result is passed to generate_text."""
         try:
             response = self._request_with_retry(url, timeout=30, attempts=3)
-
-            if extract_text and not selector:
-                # Simple text extraction
-                content = response.text
-                return {"success": True, "content": content, "url": url}
-            else:
-                # For CSS selector, would need BeautifulSoup
-                return {"success": True, "content": response.text, "url": url, "note": "CSS selector parsing not implemented"}
+            raw = response.text
+            truncated = len(raw) > self._SCRAPE_MAX_CHARS
+            content = raw[: self._SCRAPE_MAX_CHARS] if truncated else raw
+            result = {"success": True, "content": content, "url": url}
+            if truncated:
+                result["note"] = f"Content truncated to {self._SCRAPE_MAX_CHARS} chars (original: {len(raw)})"
+            return result
         except Exception as e:
             return {"success": False, "error": str(e)}
 
