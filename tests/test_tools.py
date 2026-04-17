@@ -22,6 +22,42 @@ def registry() -> ToolRegistry:
     return ToolRegistry()
 
 
+def test_read_write_json_roundtrip(registry: ToolRegistry, tmp_path: Path) -> None:
+    path = tmp_path / "data.json"
+    w = registry.get_tool("write_json").function(
+        file_path=str(path), data={"a": 1, "b": [2, 3]}
+    )
+    assert w["success"] is True
+    r = registry.get_tool("read_json").function(file_path=str(path))
+    assert r["success"] is True
+    assert r["data"] == {"a": 1, "b": [2, 3]}
+
+
+def test_append_file(registry: ToolRegistry, tmp_path: Path) -> None:
+    p = tmp_path / "log.txt"
+    a1 = registry.get_tool("append_file").function(file_path=str(p), content="one\n")
+    assert a1["success"] is True
+    a2 = registry.get_tool("append_file").function(file_path=str(p), content="two")
+    assert a2["success"] is True
+    raw = p.read_text()
+    assert raw == "one\ntwo"
+
+
+def test_hash_file(registry: ToolRegistry, tmp_path: Path) -> None:
+    p = tmp_path / "blob.bin"
+    p.write_bytes(b"hello")
+    h = registry.get_tool("hash_file").function(file_path=str(p), algorithm="sha256")
+    assert h["success"] is True
+    assert h["hex_digest"] == "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+
+
+def test_get_current_time_utc(registry: ToolRegistry) -> None:
+    t = registry.get_tool("get_current_time").function(timezone="UTC")
+    assert t["success"] is True
+    assert "T" in t["iso"]
+    assert t["unix"] > 0
+
+
 def test_write_and_read_file_roundtrip(registry: ToolRegistry, tmp_path: Path) -> None:
     write = registry.get_tool("write_file").function
     read = registry.get_tool("read_file").function
@@ -43,15 +79,6 @@ def test_write_file_handles_bare_filename(
     result = registry.get_tool("write_file").function(file_path="bare.txt", content="ok")
     assert result["success"] is True
     assert (tmp_path / "bare.txt").read_text() == "ok"
-
-
-def test_analyze_data_average(registry: ToolRegistry) -> None:
-    result = registry.get_tool("analyze_data").function(data=[1, 2, 3, 4], operation="average")
-    assert result["success"] is True
-    assert result["operation"] == "average"
-    assert result["result"] == 2.5
-    assert result["error"] is None
-    assert result["meta"]["tool"] == "analyze_data"
 
 
 def test_compress_and_extract_roundtrip(registry: ToolRegistry, tmp_path: Path) -> None:
@@ -94,6 +121,23 @@ def test_send_email_returns_structured_error_without_creds(
     assert result["success"] is False
     assert "required" in result
     assert set(result["required"]) >= {"EMAIL_USER", "EMAIL_PASSWORD"}
+
+
+def test_send_email_fails_when_attachment_missing(
+    registry: ToolRegistry, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("EMAIL_USER", "a@b.com")
+    monkeypatch.setenv("EMAIL_PASSWORD", "secret")
+    monkeypatch.setenv("EMAIL_FROM", "a@b.com")
+    monkeypatch.chdir(tmp_path)
+    result = registry.get_tool("send_email").function(
+        recipient="x@y.com",
+        subject="t",
+        body="hi",
+        attachments=["does-not-exist.txt"],
+    )
+    assert result["success"] is False
+    assert "Attachment not found" in (result.get("error") or "")
 
 
 def test_download_uses_requests(registry: ToolRegistry, monkeypatch: pytest.MonkeyPatch) -> None:

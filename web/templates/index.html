@@ -112,6 +112,12 @@
                     <h2>Available tools</h2>
                     <span id="toolCountPill" class="pill">0 tools</span>
                 </div>
+                <p class="muted tools-intro">
+                    These functions are exposed to <strong>generated Python workflows</strong> via
+                    <code>ToolRegistry().get_tool('name')</code>. Each card lists parameters your natural-language
+                    steps can map to after parsing. Categories help filter; search matches names, descriptions, and
+                    parameter keys. New tools appear here automatically from the server&rsquo;s registry.
+                </p>
                 <div class="tool-controls">
                     <input id="toolSearchInput" type="text" placeholder="Search tools by name, description, or parameter...">
                     <select id="toolCategorySelect" class="select">

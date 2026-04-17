@@ -27,7 +27,11 @@ class WorkflowParser:
     REQUIRED_ACTION_PARAMS: Dict[str, List[str]] = {
         "download": ["url"],
         "read_file": ["file_path"],
+        "read_json": ["file_path"],
         "write_file": ["file_path"],
+        "write_json": ["file_path", "data"],
+        "append_file": ["file_path", "content"],
+        "hash_file": ["file_path"],
         "read_csv": ["file_path"],
         "write_csv": ["file_path"],
         "send_email": ["recipient"],
@@ -222,13 +226,30 @@ class WorkflowParser:
         if 'write' in words:
             if 'csv' in words:
                 return 'write_csv', self._extract_file_params(description)
+            if 'json' in words:
+                fp = self._extract_file_params(description)
+                return 'write_json', {**fp, 'data': {}}
             return 'write_file', self._extract_file_params(description)
 
         # ── File read ─────────────────────────────────────────────────────────
-        if 'read' in words and ('file' in words or 'csv' in words):
+        if 'read' in words and (
+            'file' in words or 'csv' in words or 'json' in words or '.json' in d
+        ):
             if 'csv' in words:
                 return 'read_csv', self._extract_file_params(description)
+            if 'json' in words or '.json' in d:
+                return 'read_json', self._extract_file_params(description)
             return 'read_file', self._extract_file_params(description)
+
+        if 'append' in words and ('file' in words or 'log' in words):
+            return 'append_file', self._extract_append_params(description)
+
+        if ('hash' in words or 'checksum' in words or 'sha256' in d) and \
+                ('file' in words or '.json' in d or '.txt' in d or '.csv' in d):
+            return 'hash_file', self._extract_file_params(description)
+
+        if ('current' in words or 'now' in words) and 'time' in words:
+            return 'get_current_time', self._extract_time_params(description)
 
         # ── File ops ─────────────────────────────────────────────────────────
         if 'copy' in words and 'file' in words:
@@ -251,16 +272,6 @@ class WorkflowParser:
         if 'notify' in words or 'notification' in words or \
                 ('send' in words and 'notification' in words):
             return 'send_notification', self._extract_notification_params(description)
-
-        # ── Data ─────────────────────────────────────────────────────────────
-        if 'process' in words or 'transform' in words:
-            if 'json' in words:
-                return 'process_json', self._extract_json_params(description)
-            return 'process_data', self._extract_process_params(description)
-
-        if 'analyze' in words or 'calculate' in words or \
-                'compute' in words or 'average' in words:
-            return 'analyze_data', self._extract_analysis_params(description)
 
         # ── Database ─────────────────────────────────────────────────────────
         if 'database' in words or 'sql' in words or 'sqlite' in words:
@@ -334,18 +345,51 @@ class WorkflowParser:
             'description': description
         }
 
+    def _extract_append_params(self, description: str) -> Dict[str, Any]:
+        """Extract file path and content for append_file."""
+        quoted = re.findall(r'["\']([^"\']*)["\']', description)
+        file_path = ""
+        content = ""
+        for q in quoted:
+            if re.search(r'\.[a-zA-Z0-9]+\s*$', q) or "/" in q or "\\" in q:
+                if not file_path:
+                    file_path = q
+            elif q.strip():
+                content = q
+        if not file_path and quoted:
+            file_path = quoted[-1]
+        if not content and len(quoted) >= 2:
+            for q in quoted:
+                if q != file_path:
+                    content = q
+                    break
+        return {'file_path': file_path, 'content': content, 'description': description}
+
+    def _extract_time_params(self, description: str) -> Dict[str, Any]:
+        """Optional IANA timezone for get_current_time."""
+        d = description.strip()
+        m = re.search(
+            r'\b([A-Za-z][A-Za-z_]*/[A-Za-z][A-Za-z_]*(?:/[A-Za-z][A-Za-z_]*)?)\b',
+            d,
+        )
+        if m:
+            return {'timezone': m.group(1), 'description': description}
+        low = d.lower()
+        if 'seattle' in low or 'los angeles' in low or 'pacific' in low:
+            return {'timezone': 'America/Los_Angeles', 'description': description}
+        if 'new york' in low or 'eastern' in low or 'boston' in low:
+            return {'timezone': 'America/New_York', 'description': description}
+        if 'london' in low or 'uk' in low or 'gmt' in low or 'british' in low:
+            return {'timezone': 'Europe/London', 'description': description}
+        if 'tokyo' in low or 'japan' in low:
+            return {'timezone': 'Asia/Tokyo', 'description': description}
+        return {'timezone': 'UTC', 'description': description}
+
     def _extract_email_params(self, description: str) -> Dict[str, Any]:
         """Extract email parameters from description"""
         email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', description)
         return {
             'recipient': email_match.group() if email_match else '',
-            'description': description
-        }
-
-    def _extract_process_params(self, description: str) -> Dict[str, Any]:
-        """Extract processing parameters from description"""
-        return {
-            'operation': description,
             'description': description
         }
 
@@ -364,22 +408,6 @@ class WorkflowParser:
             'seconds': seconds,
             'description': description
         }
-
-    def _extract_json_params(self, description: str) -> Dict[str, Any]:
-        """Extract JSON processing parameters"""
-        return {
-            'operation': 'extract' if 'extract' in description.lower() else 'filter',
-            'path': self._extract_json_path(description),
-            'description': description
-        }
-
-    def _extract_json_path(self, description: str) -> str:
-        """Extract JSONPath from description"""
-        # Look for patterns like "extract price from data.bitcoin.usd"
-        path_match = re.search(r'(?:extract|get|find)\s+(\w+)\s+from\s+([\w\.\[\]]+)', description.lower())
-        if path_match:
-            return path_match.group(2)
-        return ""
 
     def _extract_file_operation_params(self, description: str) -> Dict[str, Any]:
         """Extract file operation parameters (copy, move)"""
@@ -431,18 +459,6 @@ class WorkflowParser:
             params['archive_path'] = archive_match.group(1)
 
         return params
-
-    def _extract_analysis_params(self, description: str) -> Dict[str, Any]:
-        """Extract data analysis parameters"""
-        # Look for analysis type
-        analysis_types = ['sum', 'average', 'count', 'min', 'max', 'total']
-        for analysis_type in analysis_types:
-            if analysis_type in description.lower():
-                return {
-                    'operation': analysis_type,
-                    'description': description
-                }
-        return {'operation': 'count', 'description': description}
 
     def _extract_notification_params(self, description: str) -> Dict[str, Any]:
         """Extract notification parameters"""

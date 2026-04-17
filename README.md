@@ -29,7 +29,7 @@ On macOS, `/usr/bin/python3` is often 3.9; use Homebrew `python3.11` (or similar
 ## Highlights
 
 - Text descriptions or screen-recording videos → executable Python.
-- 25+ built-in tools including `http_request`, `generate_text`, and `fetch_stock_price`.
+- 27 built-in tools including `http_request`, `generate_text`, `read_json` / `write_json`, `append_file`, `hash_file`, `get_current_time`, and `fetch_stock_price`.
 - Browser UI with tabs, live streaming output, save/load workflows, and inline credential prompts.
 - Credentials stay in your browser's `sessionStorage` or `.env` — never written to disk server-side.
 - Hybrid parsing: rule-based first, AI assist only when confidence is low.
@@ -119,7 +119,7 @@ workflowMVP/
 ├── workflowmvp/
 │   ├── parser.py            # rule-based text → structured steps
 │   ├── agent.py             # LLM-backed code generator (multi-provider)
-│   ├── tools.py             # ToolRegistry: 25+ tools
+│   ├── tools.py             # ToolRegistry: 27 tools
 │   └── video_to_workflow.py # frame sampling + Gemini vision analysis
 ├── web/
 │   ├── templates/index.html

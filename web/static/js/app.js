@@ -185,6 +185,10 @@ function toolCategory(name) {
     if (n === "generate_text") return "ai";
     if (n === "fetch_stock_price") return "finance";
     if (n === "http_request") return "network";
+    if (n === "read_json" || n === "write_json") return "data";
+    if (n === "append_file") return "filesystem";
+    if (n === "hash_file") return "filesystem";
+    if (n === "get_current_time") return "datetime";
     if (n.includes("email") || n.includes("notification")) return "communication";
     if (n.includes("csv") || n.includes("json") || n.includes("analyze") || n.includes("process_data")) return "data";
     if (n.includes("sqlite") || n.includes("query") || n.includes("insert")) return "database";

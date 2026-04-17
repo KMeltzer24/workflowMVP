@@ -60,6 +60,25 @@ def test_confidence_flags_custom_heavy_parse(parser: WorkflowParser) -> None:
     assert confidence["score"] < 0.55
 
 
+def test_parses_read_json(parser: WorkflowParser) -> None:
+    steps = parser.parse_workflow('1. Read json from file "config.json"')
+    assert len(steps) == 1
+    assert steps[0].action == "read_json"
+    assert steps[0].parameters.get("file_path") == "config.json"
+
+
+def test_parses_write_json(parser: WorkflowParser) -> None:
+    steps = parser.parse_workflow('1. Write json to file "out.json"')
+    assert steps[0].action == "write_json"
+    assert steps[0].parameters.get("file_path") == "out.json"
+
+
+def test_parses_get_current_time(parser: WorkflowParser) -> None:
+    steps = parser.parse_workflow("1. Get the current time in America/New_York")
+    assert steps[0].action == "get_current_time"
+    assert steps[0].parameters.get("timezone") == "America/New_York"
+
+
 def test_parses_step_number_and_description_on_next_line(
     parser: WorkflowParser,
 ) -> None:

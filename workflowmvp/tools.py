@@ -3,6 +3,7 @@ Tool Registry - Common workflow operations and tools
 """
 
 import csv
+import hashlib
 import json
 import os
 import re
@@ -12,8 +13,12 @@ import sqlite3
 import subprocess
 import sys
 import time
+from datetime import datetime
+from datetime import timezone as dt_timezone
+from zoneinfo import ZoneInfo
 import warnings
 from dataclasses import dataclass
+from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Any, Callable, Dict, List, Optional
@@ -231,29 +236,22 @@ class ToolRegistry:
 
         self.register_tool(Tool(
             name="send_email",
-            description="Send an email via SMTP. Credentials come from arguments or env vars (never from input()).",
+            description=(
+                "Send an email via SMTP. Credentials come from arguments or env vars (never from input()). "
+                "Optional attachments: list of relative file paths (read from sandbox cwd)."
+            ),
             function=self._send_email,
             parameters={
                 "recipient": "Email recipient",
                 "subject": "Email subject",
-                "body": "Email body",
+                "body": "Email body (plain text); use a short line like 'See attached.' when sending files",
+                "attachments": "Optional: list of file paths to attach, or a single path string",
                 "smtp_server": "SMTP server (default: env SMTP_SERVER or smtp.gmail.com)",
                 "smtp_port": "SMTP port (default: env SMTP_PORT or 587)",
                 "email_user": "SMTP username (default: env EMAIL_USER)",
                 "email_password": "SMTP password / app password (default: env EMAIL_PASSWORD)",
                 "email_from": "From address (default: env EMAIL_FROM or email_user)",
             },
-        ))
-
-        # Process data tool
-        self.register_tool(Tool(
-            name="process_data",
-            description="Process or transform data",
-            function=self._process_data,
-            parameters={
-                "data": "Data to process",
-                "operation": "Processing operation to perform"
-            }
         ))
 
         # Wait tool
@@ -333,17 +331,6 @@ class ToolRegistry:
             }
         ))
 
-        self.register_tool(Tool(
-            name="process_json",
-            description="Process and transform JSON data",
-            function=self._process_json,
-            parameters={
-                "json_data": "JSON data (string or dict)",
-                "operation": "Operation to perform (extract, filter, transform)",
-                "path": "JSONPath for extraction (optional)"
-            }
-        ))
-
         # File operations
         self.register_tool(Tool(
             name="copy_file",
@@ -385,17 +372,6 @@ class ToolRegistry:
             }
         ))
 
-        # Data analysis
-        self.register_tool(Tool(
-            name="analyze_data",
-            description="Perform basic data analysis",
-            function=self._analyze_data,
-            parameters={
-                "data": "Data to analyze (list of numbers or dicts)",
-                "operation": "Analysis type (sum, average, count, min, max)"
-            }
-        ))
-
         # Web scraping
         self.register_tool(Tool(
             name="scrape_webpage",
@@ -403,8 +379,6 @@ class ToolRegistry:
             function=self._scrape_webpage,
             parameters={
                 "url": "URL to scrape",
-                "selector": "CSS selector for specific elements (optional)",
-                "extract_text": "Extract text content (default: True)"
             }
         ))
 
@@ -491,6 +465,61 @@ class ToolRegistry:
             }
         ))
 
+        self.register_tool(Tool(
+            name="read_json",
+            description="Read a UTF-8 JSON file and parse it into Python objects (returned as JSON text and structured data).",
+            function=self._read_json,
+            parameters={
+                "file_path": "Path to the .json file",
+                "encoding": "File encoding (default: utf-8)",
+            },
+        ))
+
+        self.register_tool(Tool(
+            name="write_json",
+            description="Write a dict or list to a JSON file (pretty-printed by default).",
+            function=self._write_json,
+            parameters={
+                "file_path": "Path to the output .json file",
+                "data": "Dict or list to serialize (may be passed from json.loads or Python literals)",
+                "indent": "Indent level for pretty-printing (default: 2; use None for compact)",
+                "encoding": "File encoding (default: utf-8)",
+            },
+        ))
+
+        self.register_tool(Tool(
+            name="append_file",
+            description="Append text to the end of a file (creates the file if it does not exist).",
+            function=self._append_file,
+            parameters={
+                "file_path": "Path to the file",
+                "content": "Text to append",
+                "encoding": "File encoding (default: utf-8)",
+            },
+        ))
+
+        self.register_tool(Tool(
+            name="hash_file",
+            description="Compute a cryptographic hash of file contents (default SHA-256, hex-encoded).",
+            function=self._hash_file,
+            parameters={
+                "file_path": "Path to the file",
+                "algorithm": "Hash name, e.g. sha256, sha1, md5 (default: sha256)",
+            },
+        ))
+
+        self.register_tool(Tool(
+            name="get_current_time",
+            description=(
+                "Return the current date/time in an IANA timezone (e.g. America/New_York) "
+                "as ISO 8601 string and Unix timestamp. Use UTC if unsure."
+            ),
+            function=self._get_current_time,
+            parameters={
+                "timezone": "IANA zone name (default: UTC), e.g. America/Los_Angeles",
+            },
+        ))
+
     # Tool implementations
     def _download(self, url: str, output_file: str = None) -> Dict[str, Any]:
         """Download content from URL"""
@@ -533,11 +562,110 @@ class ToolRegistry:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    def _read_json(self, file_path: str, encoding: str = "utf-8") -> Dict[str, Any]:
+        """Read and parse JSON from a file."""
+        try:
+            safe_path = self._sandbox_path(file_path)
+            with open(safe_path, encoding=encoding) as f:
+                raw = f.read()
+            data = json.loads(raw)
+            text = json.dumps(data, indent=2, ensure_ascii=False)
+            return {"success": True, "content": text, "data": data, "size": len(raw)}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def _write_json(
+        self,
+        file_path: str,
+        data: Any,
+        indent: Any = 2,
+        encoding: str = "utf-8",
+    ) -> Dict[str, Any]:
+        """Write JSON-serializable data to a file."""
+        try:
+            if isinstance(data, str):
+                try:
+                    data = json.loads(data)
+                except json.JSONDecodeError:
+                    return {"success": False, "error": "data must be dict/list or a JSON string"}
+            if not isinstance(data, (dict, list)):
+                return {"success": False, "error": "data must be a dict or list (or JSON string)"}
+            safe_path = self._sandbox_path(file_path)
+            parent = os.path.dirname(safe_path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            if indent is None or (isinstance(indent, str) and indent.lower() in ("none", "null")):
+                ind = None
+            else:
+                ind = int(indent)
+            text = json.dumps(data, indent=ind, ensure_ascii=False)
+            with open(safe_path, "w", encoding=encoding) as f:
+                f.write(text)
+            return {"success": True, "file": safe_path, "size": len(text)}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def _append_file(self, file_path: str, content: str, encoding: str = "utf-8") -> Dict[str, Any]:
+        """Append text to a file."""
+        try:
+            safe_path = self._sandbox_path(file_path)
+            parent = os.path.dirname(safe_path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            with open(safe_path, "a", encoding=encoding) as f:
+                f.write(content)
+            return {"success": True, "file": safe_path, "size": len(content)}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def _hash_file(self, file_path: str, algorithm: str = "sha256") -> Dict[str, Any]:
+        """Hash file contents."""
+        try:
+            safe_path = self._sandbox_path(file_path)
+            algo = (algorithm or "sha256").lower()
+            h = hashlib.new(algo)
+            with open(safe_path, "rb") as f:
+                for chunk in iter(lambda: f.read(65536), b""):
+                    h.update(chunk)
+            digest = h.hexdigest()
+            return {
+                "success": True,
+                "hex_digest": digest,
+                "algorithm": algo,
+                "file_path": file_path,
+                "result": digest,
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def _get_current_time(self, timezone: str = "UTC") -> Dict[str, Any]:
+        """Current time in an IANA timezone."""
+        try:
+            tz_name = (timezone or "UTC").strip()
+            if tz_name.upper() in ("UTC", "GMT", "Z", "ZULU"):
+                now = datetime.now(dt_timezone.utc)
+                tz_label = "UTC"
+            else:
+                tz = ZoneInfo(tz_name)
+                now = datetime.now(tz)
+                tz_label = tz_name
+            iso = now.isoformat()
+            return {
+                "success": True,
+                "iso": iso,
+                "timezone": tz_label,
+                "unix": int(now.timestamp()),
+                "result": iso,
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
     def _send_email(
         self,
         recipient: str,
         subject: str,
         body: str,
+        attachments: Any = None,
         smtp_server: Optional[str] = None,
         smtp_port: Optional[int] = None,
         email_user: Optional[str] = None,
@@ -550,6 +678,9 @@ class ToolRegistry:
         the Flask server there is no stdin, so an input() prompt would hang the
         run indefinitely. Missing creds are reported as a structured error so
         the UI can surface them and re-run with creds attached.
+
+        ``attachments`` may be a list of relative paths or a single path string;
+        files are read after ``_sandbox_path`` resolution.
         """
         try:
             email_user = email_user or os.getenv("EMAIL_USER")
@@ -583,11 +714,39 @@ class ToolRegistry:
                     "required": missing,
                 }
 
+            attach_paths: List[str] = []
+            if attachments is not None:
+                if isinstance(attachments, str):
+                    attach_paths = [attachments] if attachments.strip() else []
+                elif isinstance(attachments, (list, tuple)):
+                    attach_paths = [str(p) for p in attachments if p and str(p).strip()]
+
+            text_body = (body or "").strip()
+            if not text_body and attach_paths:
+                text_body = "See attached."
+
             msg = MIMEMultipart()
             msg["From"] = email_from
             msg["To"] = recipient
             msg["Subject"] = subject
-            msg.attach(MIMEText(body, "plain"))
+            msg.attach(MIMEText(text_body, "plain", "utf-8"))
+
+            for rel in attach_paths:
+                safe = self._sandbox_path(rel)
+                if not os.path.isfile(safe):
+                    return {
+                        "success": False,
+                        "error": f"Attachment not found or not a file: {rel}",
+                    }
+                with open(safe, "rb") as f:
+                    blob = f.read()
+                part = MIMEApplication(blob)
+                part.add_header(
+                    "Content-Disposition",
+                    "attachment",
+                    filename=os.path.basename(safe),
+                )
+                msg.attach(part)
 
             attempts = 3
             for attempt in range(1, attempts + 1):
@@ -616,24 +775,6 @@ class ToolRegistry:
                 "success": True,
                 "message": f"Email sent successfully to {recipient}",
             }
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-
-    def _process_data(self, data: Any, operation: str) -> Dict[str, Any]:
-        """Process data based on operation"""
-        try:
-            if operation.lower() == 'uppercase' and isinstance(data, str):
-                result = data.upper()
-            elif operation.lower() == 'lowercase' and isinstance(data, str):
-                result = data.lower()
-            elif operation.lower() == 'count' and isinstance(data, str):
-                result = len(data)
-            elif operation.lower() == 'reverse' and isinstance(data, str):
-                result = data[::-1]
-            else:
-                result = f"Processed: {data} with operation: {operation}"
-
-            return {"success": True, "result": result}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -762,37 +903,6 @@ class ToolRegistry:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    def _process_json(self, json_data: Any, operation: str, path: Optional[str] = None) -> Dict[str, Any]:
-        """Process and transform JSON data"""
-        try:
-            if isinstance(json_data, str):
-                data = json.loads(json_data)
-            else:
-                data = json_data
-
-            if operation == "extract" and path:
-                # Simple path extraction (e.g., "data.users[0].name")
-                result = data
-                for part in path.split('.'):
-                    if '[' in part and ']' in part:
-                        key, index = part.split('[')
-                        index = int(index.rstrip(']'))
-                        result = result[key][index]
-                    else:
-                        result = result[part]
-                return {"success": True, "result": result}
-            elif operation == "filter" and path:
-                # Filter based on path
-                if isinstance(data, list):
-                    filtered = [item for item in data if path in str(item)]
-                    return {"success": True, "result": filtered}
-                else:
-                    return {"success": True, "result": data}
-            else:
-                return {"success": True, "result": data}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-
     # File operations
     def _copy_file(self, source: str, destination: str) -> Dict[str, Any]:
         """Copy file from source to destination"""
@@ -861,30 +971,6 @@ class ToolRegistry:
             }
         except subprocess.TimeoutExpired:
             return {"success": False, "error": f"Command timed out after {timeout} seconds"}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-
-    # Data analysis
-    def _analyze_data(self, data: List, operation: str) -> Dict[str, Any]:
-        """Perform basic data analysis"""
-        try:
-            if not data:
-                return {"success": False, "error": "No data provided"}
-
-            if operation == "sum":
-                result = sum(data)
-            elif operation == "average":
-                result = sum(data) / len(data)
-            elif operation == "count":
-                result = len(data)
-            elif operation == "min":
-                result = min(data)
-            elif operation == "max":
-                result = max(data)
-            else:
-                return {"success": False, "error": f"Unknown operation: {operation}"}
-
-            return {"success": True, "operation": operation, "result": result}
         except Exception as e:
             return {"success": False, "error": str(e)}
 

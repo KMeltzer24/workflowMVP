@@ -305,9 +305,9 @@ When a tool returns JSON text (e.g. download), parse the content string — not 
 
 ━━━ SPECIFIC TOOL GUIDANCE ━━━
 
-EMAIL — send_email reads credentials from env automatically:
+EMAIL — send_email: recipient, subject, body (plain text), plus optional attachments (list of relative file paths or one string path). Files are sent as real MIME attachments. You may use a short body like "See attached." when attaching. Without attachments, body carries the full message. Never invent email_from — omit it or use os.getenv('EMAIL_FROM').
    email_tool = tools.get_tool('send_email')
-   email_tool.function(recipient='you@example.com', subject='...', body='...')
+   email_tool.function(recipient='you@example.com', subject='...', body='...', attachments=['report.md'])
 
 AI TEXT GENERATION — for any writing, summarising, translating, or creative task:
    gen = tools.get_tool('generate_text')
@@ -318,6 +318,15 @@ SCRAPING — scrape_webpage strips HTML tags and returns clean readable text (up
    Always use the exact URL from the step description. Never guess or construct subpage paths.
    Slice before passing to generate_text:
    content = (r.get('result') or r.get('content', ''))[:3000]
+
+   AVOID scraping Google News / Google Search HTML (news.google.com/topics, /search?, etc.) — servers often return 400/403 to automated clients even with browser headers.
+
+NEWS HEADLINES (no URL in the workflow) — use download or http_request on a public RSS/XML feed, then summarize with generate_text. Example pattern:
+   dl = tools.get_tool('download')
+   r = dl.function(url='https://news.google.com/rss/search?q=artificial+intelligence&hl=en-US&gl=US&ceid=US:en')
+   raw = r.get('content') or r.get('result') or ''
+   # Pass raw (XML) to generate_text: "From this RSS XML, list and summarize the top 3 items..."
+   Or use another site's RSS/JSON API the user explicitly named.
 
    CRITICAL: when building a generate_text prompt from scraped content, explicitly tell the model
    to use ONLY information found in the content and to state when details are missing — never
@@ -347,8 +356,18 @@ HTTP / REST APIs — use http_request for any POST/PUT/DELETE or API with auth:
    api = tools.get_tool('http_request')
    r = api.function(url='https://...', method='POST', body={{'key': 'value'}})
 
-DATA ANALYSIS — analyze_data supports ONLY: sum, average, count, min, max.
-   For comparisons, trends, or differences, write plain Python arithmetic instead.
+JSON FILES — read_json / write_json for structured config and API payloads (prefer over manual string concat):
+   rj = tools.get_tool('read_json')
+   r = rj.function(file_path='config.json')
+   data = r.get('data') if r.get('success') else {{}}
+   wj = tools.get_tool('write_json')
+   wj.function(file_path='out.json', data={{'ok': True}}, indent=2)
+
+APPEND / LOG LINES — append_file adds text without reading the whole file first.
+
+FILE INTEGRITY — hash_file(file_path='backup.zip', algorithm='sha256') returns hex_digest.
+
+DATE & TIME — get_current_time(timezone='America/Los_Angeles') returns iso, unix, timezone (IANA names). Use for timestamps in reports and emails.
 
 ━━━ RECORDINGS VS. INTENT (UI-HEAVY STEPS) ━━━
 

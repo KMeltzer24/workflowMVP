@@ -20,7 +20,17 @@ def test_tools_endpoint(client) -> None:
     payload = response.get_json()
     assert isinstance(payload, list)
     names = {tool["name"] for tool in payload}
-    assert {"download", "read_file", "write_file", "send_email"}.issubset(names)
+    assert {
+        "download",
+        "read_file",
+        "write_file",
+        "send_email",
+        "read_json",
+        "write_json",
+        "append_file",
+        "hash_file",
+        "get_current_time",
+    }.issubset(names)
 
 
 def test_examples_endpoint_exposes_requirements(client) -> None:
