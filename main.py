@@ -74,7 +74,13 @@ ACTION_REQUIREMENTS: Dict[str, List[str]] = {
 
 # Allow-list of credential keys the web layer will inject into subprocess env.
 ALLOWED_CRED_KEYS = {
+    "LLM_PROVIDER",
+    "LLM_MODEL",
     "GEMINI_API_KEY",
+    "GROQ_API_KEY",
+    "OPENROUTER_API_KEY",
+    "GROQ_MODEL",
+    "OPENROUTER_MODEL",
     "EMAIL_USER",
     "EMAIL_PASSWORD",
     "EMAIL_FROM",
@@ -110,9 +116,36 @@ def _sanitize_credentials(raw: Optional[Dict[str, Any]]) -> Dict[str, str]:
     return out
 
 
-def _resolve_api_key(creds: Dict[str, str]) -> Optional[str]:
-    """Per-request Gemini key beats .env."""
+def _resolve_llm_provider(creds: Dict[str, str]) -> str:
+    provider = (creds.get("LLM_PROVIDER") or os.getenv("LLM_PROVIDER") or "gemini").strip().lower()
+    return provider if provider in {"gemini", "groq", "openrouter"} else "gemini"
+
+
+def _resolve_llm_model(provider: str, creds: Dict[str, str]) -> Optional[str]:
+    if creds.get("LLM_MODEL"):
+        return creds["LLM_MODEL"]
+    if provider == "gemini":
+        return creds.get("GEMINI_MODEL") or os.getenv("GEMINI_MODEL")
+    if provider == "groq":
+        return creds.get("GROQ_MODEL") or os.getenv("GROQ_MODEL")
+    return creds.get("OPENROUTER_MODEL") or os.getenv("OPENROUTER_MODEL")
+
+
+def _resolve_api_key(provider: str, creds: Dict[str, str]) -> Optional[str]:
+    """Resolve provider-specific API key (request creds take precedence)."""
+    if provider == "groq":
+        return creds.get("GROQ_API_KEY") or os.getenv("GROQ_API_KEY")
+    if provider == "openrouter":
+        return creds.get("OPENROUTER_API_KEY") or os.getenv("OPENROUTER_API_KEY")
     return creds.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
+
+
+def _missing_llm_key(provider: str) -> str:
+    return {
+        "gemini": "GEMINI_API_KEY",
+        "groq": "GROQ_API_KEY",
+        "openrouter": "OPENROUTER_API_KEY",
+    }.get(provider, "GEMINI_API_KEY")
 
 
 def _build_run_env(creds: Dict[str, str]) -> Dict[str, str]:
@@ -265,7 +298,9 @@ def parse_workflow():
         payload = request.get_json(silent=True) or {}
         workflow_text = payload.get("workflow_text", "")
         creds = _sanitize_credentials(payload.get("credentials"))
-        api_key = _resolve_api_key(creds)
+        provider = _resolve_llm_provider(creds)
+        model = _resolve_llm_model(provider, creds)
+        api_key = _resolve_api_key(provider, creds)
         parser = WorkflowParser()
         steps = parser.parse_workflow(workflow_text)
         confidence = parser.assess_parse_confidence(steps)
@@ -274,7 +309,7 @@ def parse_workflow():
         ai_assist_error: Optional[str] = None
         if api_key and confidence.get("needs_ai_assist"):
             try:
-                ai_agent = WorkflowAgent(api_key=api_key)
+                ai_agent = WorkflowAgent(api_key=api_key, provider=provider, model=model)
                 improved = ai_agent.improve_parsed_steps(workflow_text, steps)
                 if improved:
                     steps = improved
@@ -312,7 +347,16 @@ def parse_video():
         creds = _sanitize_credentials(
             _creds_from_form_or_json(request.form.get("credentials"))
         )
-        api_key = _resolve_api_key(creds)
+        provider = _resolve_llm_provider(creds)
+        if provider != "gemini":
+            return jsonify(
+                {
+                    "success": False,
+                    "error": "Video parsing currently supports provider=gemini only.",
+                    "missing_requirements": ["GEMINI_API_KEY"],
+                }
+            )
+        api_key = _resolve_api_key("gemini", creds)
         if not api_key:
             return jsonify(
                 {
@@ -375,14 +419,17 @@ def generate_workflow():
         steps_data = payload.get("steps", [])
         workflow_name = _safe_name(payload.get("name", "generated_workflow"))
         creds = _sanitize_credentials(payload.get("credentials"))
+        provider = _resolve_llm_provider(creds)
+        model = _resolve_llm_model(provider, creds)
 
-        api_key = _resolve_api_key(creds)
+        api_key = _resolve_api_key(provider, creds)
         if not api_key:
+            missing_key = _missing_llm_key(provider)
             return jsonify(
                 {
                     "success": False,
-                    "error": "Missing GEMINI_API_KEY. Add it in Settings or .env.",
-                    "missing_requirements": ["GEMINI_API_KEY"],
+                    "error": f"Missing {missing_key}. Add it in Settings or .env.",
+                    "missing_requirements": [missing_key],
                 }
             )
 
@@ -402,7 +449,7 @@ def generate_workflow():
         output_path = os.path.join(
             GENERATED_DIR, f"{workflow_name}_{timestamp}.py"
         )
-        agent = WorkflowAgent(api_key=api_key)
+        agent = WorkflowAgent(api_key=api_key, provider=provider, model=model)
         agent.generate_workflow_code(steps, output_path)
 
         # Return path relative to project root so the UI can treat it as opaque.

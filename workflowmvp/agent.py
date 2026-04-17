@@ -8,22 +8,51 @@ import re
 from typing import List, Optional
 
 import google.generativeai as genai
+import requests
 
 from .parser import WorkflowStep
 from .tools import ToolRegistry
 
 DEFAULT_GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+DEFAULT_GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+DEFAULT_OPENROUTER_MODEL = os.getenv(
+    "OPENROUTER_MODEL", "meta-llama/llama-3.1-70b-instruct"
+)
 
 
 class WorkflowAgent:
     """AI agent that generates executable code from workflow steps"""
 
-    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
-        self.model = model or DEFAULT_GEMINI_MODEL
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+        provider: Optional[str] = None,
+    ):
+        self.provider = (provider or os.getenv("LLM_PROVIDER", "gemini")).strip().lower()
+        if self.provider not in {"gemini", "groq", "openrouter"}:
+            raise ValueError(
+                f"Unsupported provider '{self.provider}'. Use gemini, groq, or openrouter."
+            )
+
+        default_model = {
+            "gemini": DEFAULT_GEMINI_MODEL,
+            "groq": DEFAULT_GROQ_MODEL,
+            "openrouter": DEFAULT_OPENROUTER_MODEL,
+        }[self.provider]
+        self.model = model or default_model
         self.tool_registry = ToolRegistry()
 
-        self.api_key = api_key or os.getenv('GEMINI_API_KEY')
-        if self.api_key:
+        if api_key:
+            self.api_key = api_key
+        elif self.provider == "gemini":
+            self.api_key = os.getenv("GEMINI_API_KEY")
+        elif self.provider == "groq":
+            self.api_key = os.getenv("GROQ_API_KEY")
+        else:
+            self.api_key = os.getenv("OPENROUTER_API_KEY")
+
+        if self.api_key and self.provider == "gemini":
             genai.configure(api_key=self.api_key)
             self.client = genai.GenerativeModel(self.model)
         else:
@@ -39,22 +68,19 @@ class WorkflowAgent:
         # Create user prompt with workflow steps
         user_prompt = self._create_user_prompt(steps)
 
-        # Require Gemini API key; no offline fallback
-        if not self.client:
-            raise ValueError("GEMINI_API_KEY is required for code generation. Set env var or pass --api-key.")
+        # Require selected provider API key; no offline fallback
+        if not self.api_key:
+            key_name = self.required_api_key_name(self.provider)
+            raise ValueError(
+                f"{key_name} is required for code generation. Set env var or pass credentials."
+            )
 
         try:
-            # Gemini API call
-            response = self.client.generate_content(
-                f"{system_prompt}\n\n{user_prompt}",
-                generation_config=genai.types.GenerationConfig(
-                    temperature=0.1,
-                    max_output_tokens=2000,
-                )
+            generated_code = self._extract_python_script(
+                self._generate_text(f"{system_prompt}\n\n{user_prompt}")
             )
-            generated_code = self._extract_python_script(response.text or "")
             if not generated_code:
-                raise ValueError("Gemini returned empty code.")
+                raise ValueError("Model returned empty code.")
 
             # Write the generated code to file
             with open(output_file, 'w', encoding='utf-8') as f:
@@ -103,12 +129,64 @@ class WorkflowAgent:
         cleaned = "\n".join(lines[start_idx:]).strip()
         return cleaned
 
+    @classmethod
+    def required_api_key_name(cls, provider: str) -> str:
+        mapping = {
+            "gemini": "GEMINI_API_KEY",
+            "groq": "GROQ_API_KEY",
+            "openrouter": "OPENROUTER_API_KEY",
+        }
+        return mapping.get(provider, "GEMINI_API_KEY")
+
+    def _generate_text(self, prompt: str) -> str:
+        if self.provider == "gemini":
+            assert self.client is not None
+            response = self.client.generate_content(
+                prompt,
+                generation_config=genai.types.GenerationConfig(
+                    temperature=0.1,
+                    max_output_tokens=2000,
+                ),
+            )
+            return response.text or ""
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        if self.provider == "groq":
+            url = "https://api.groq.com/openai/v1/chat/completions"
+        else:
+            url = "https://openrouter.ai/api/v1/chat/completions"
+            headers["HTTP-Referer"] = os.getenv("OPENROUTER_SITE_URL", "http://localhost:5050")
+            headers["X-Title"] = os.getenv("OPENROUTER_APP_NAME", "WorkflowMVP")
+
+        payload = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.1,
+            "max_tokens": 2000,
+        }
+        response = requests.post(url, headers=headers, json=payload, timeout=60)
+        response.raise_for_status()
+        data = response.json()
+        choices = data.get("choices") or []
+        if not choices:
+            raise ValueError(f"{self.provider} returned no choices.")
+        message = choices[0].get("message") or {}
+        content = message.get("content", "")
+        if isinstance(content, list):
+            chunks = [chunk.get("text", "") for chunk in content if isinstance(chunk, dict)]
+            return "\n".join(chunks).strip()
+        return str(content)
+
     def improve_parsed_steps(
         self, workflow_text: str, rule_steps: List[WorkflowStep]
     ) -> List[WorkflowStep]:
         """Use Gemini to improve low-confidence parser output, returning structured steps."""
-        if not self.client:
-            raise ValueError("GEMINI_API_KEY is required for AI-assisted parsing.")
+        if not self.api_key:
+            key_name = self.required_api_key_name(self.provider)
+            raise ValueError(f"{key_name} is required for AI-assisted parsing.")
 
         tool_names = [tool.name for tool in self.tool_registry.list_tools()]
         rule_payload = [
@@ -152,8 +230,7 @@ Rule parser draft (for context):
 {json.dumps(rule_payload, indent=2)}
         """.strip()
 
-        response = self.client.generate_content(prompt)
-        text = (response.text or "").strip()
+        text = (self._generate_text(prompt) or "").strip()
         payload = self._extract_json_array(text)
         improved: List[WorkflowStep] = []
         for idx, item in enumerate(payload, start=1):

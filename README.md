@@ -6,7 +6,7 @@
 
 Turn natural-language descriptions — or screen-capture videos — into runnable Python workflows.
 
-WorkflowMVP uses Google's Gemini model to parse workflow descriptions into structured steps, generate clean Python using a built-in tool registry (file I/O, HTTP, CSV/JSON, SQLite, email, compression, …), and runs them in a sandboxed directory with live output streamed back to the browser.
+WorkflowMVP uses an online LLM provider (Gemini, Groq, or OpenRouter) to parse/generate workflow code, uses a built-in tool registry (file I/O, HTTP, CSV/JSON, SQLite, email, compression, …), and runs everything in a sandboxed directory with live output streamed back to the browser.
 
 ---
 
@@ -28,7 +28,7 @@ flowchart LR
     Browser[Browser UI]
     Flask[Flask API]
     Parser[WorkflowParser]
-    Agent["WorkflowAgent (Gemini)"]
+    Agent["WorkflowAgent (Provider API)"]
     Gen["data/generated_workflows/*.py"]
     Runner["python3 workflow.py"]
     Tools[workflowmvp.tools ToolRegistry]
@@ -57,7 +57,11 @@ pip install -r requirements.txt
 cp .env.example .env        # optional – credentials can be set via the UI
 ```
 
-Grab a Gemini API key from [Google AI Studio](https://makersuite.google.com/app/apikey) and put it in `.env` or enter it later via the Settings modal in the web UI.
+Set provider credentials in `.env`:
+- `LLM_PROVIDER=gemini|groq|openrouter`
+- matching API key (`GEMINI_API_KEY`, `GROQ_API_KEY`, or `OPENROUTER_API_KEY`)
+
+`/api/parse-video` is Gemini-only and still requires `GEMINI_API_KEY`.
 
 ## Run
 
@@ -66,6 +70,7 @@ python3 main.py                       # production mode (default port 5050)
 python3 main.py --debug               # Flask debug + auto-reload
 python3 main.py --port 5001           # pick a different port
 PORT=5001 python3 main.py             # via environment variable
+LLM_PROVIDER=groq python3 main.py     # switch LLM provider
 ```
 
 Then open <http://localhost:5050> (or whichever port you picked).
@@ -77,7 +82,9 @@ Then open <http://localhost:5050> (or whichever port you picked).
 ```bash
 make install   # runtime deps
 make dev       # dev deps (pytest, ruff)
-make run       # start the web UI
+make run       # start the web UI (Gemini default)
+make run PROVIDER=2   # Groq
+make run PROVIDER=3   # OpenRouter
 make test      # run the test suite
 make lint      # ruff check
 make clean     # wipe generated scripts + temp outputs
@@ -86,11 +93,11 @@ make clean     # wipe generated scripts + temp outputs
 ## Using the web UI
 
 1. **Create** tab — write a numbered workflow or upload a screen-capture video; click *Parse*. Edit any parsed step inline before generating code.
-2. **Generate Python code** — sends the steps to Gemini and writes a script into `data/generated_workflows/`.
+2. **Generate Python code** — sends the steps to the configured provider and writes a script into `data/generated_workflows/`.
 3. **Run** tab — executes the generated script in an isolated `data/temp_outputs/<run_id>/` directory. Output streams live via Server-Sent Events. Artifacts persist during the server session and are removed on shutdown (or via `/api/cleanup`).
 4. **Examples** tab — four self-contained examples (one requires SMTP credentials to demonstrate the inline creds prompt).
 5. **Tools** tab — browse every tool exposed to generated code.
-6. **Settings** (top right) — enter your Gemini key / SMTP credentials. Values live only in browser `sessionStorage` and are sent per-request; clear them with one click.
+6. **Settings** (top right) — enter Gemini/SMTP credentials for browser-session overrides. Provider selection + Groq/OpenRouter keys are configured via `.env` or command-line env vars.
 
 ## Example workflow
 
@@ -136,7 +143,7 @@ workflowMVP/
 ├── cleanup.py              # cleanup_files() for generated + temp outputs
 ├── workflowmvp/
 │   ├── parser.py           # numbered-text -> structured steps
-│   ├── agent.py            # Gemini-backed code generator
+│   ├── agent.py            # provider-backed code generator
 │   ├── tools.py            # ToolRegistry (20+ tools)
 │   └── video_to_workflow.py# frame sampling + Gemini vision analysis
 ├── web/
@@ -172,7 +179,7 @@ registry.register_tool(
 
 ## Troubleshooting
 
-- **"Missing GEMINI_API_KEY"** — open *Settings* or add `GEMINI_API_KEY=...` to `.env`.
+- **"Missing provider API key"** — set `LLM_PROVIDER` and matching key in `.env` (`GEMINI_API_KEY`, `GROQ_API_KEY`, or `OPENROUTER_API_KEY`).
 - **Email run fails with "Missing SMTP credentials"** — click *Settings* and fill in `EMAIL_USER`, `EMAIL_PASSWORD`, `EMAIL_FROM`. For Gmail, use an [App Password](https://myaccount.google.com/apppasswords).
 - **Video parse returns no steps** — re-record with slower, clearer UI interactions or boost `max_frames` in `workflowmvp/video_to_workflow.py`.
 - **"Workflow file not found"** — verify the path still exists under `data/generated_workflows/`; artifacts are removed on shutdown/cleanup.
