@@ -1,7 +1,7 @@
 # WorkflowMVP
 
 [![ci](https://github.com/KMeltzer24/workflowMVP/actions/workflows/ci.yml/badge.svg)](https://github.com/KMeltzer24/workflowMVP/actions/workflows/ci.yml)
-[![python](https://img.shields.io/badge/python-3.9%2B-blue)](#install)
+[![python](https://img.shields.io/badge/python-3.11%2B-blue)](#install)
 [![license](https://img.shields.io/badge/license-MIT-green)](#license)
 
 Turn natural-language descriptions — or screen-capture videos — into runnable Python workflows.
@@ -15,10 +15,14 @@ WorkflowMVP uses an online LLM (Gemini, Groq, or OpenRouter) to parse descriptio
 ```bash
 git clone https://github.com/KMeltzer24/workflowMVP.git
 cd workflowMVP
+python3.11 -m venv .venv   # optional; use any Python 3.11+
+source .venv/bin/activate  # optional
 pip install -r requirements.txt
-cp .env.example .env   # add your API key
-make run               # open http://localhost:5050
+cp .env.example .env       # add your API key
+make run                   # open http://localhost:5050
 ```
+
+On macOS, `/usr/bin/python3` is often 3.9; use Homebrew `python3.11` (or similar) to create the venv so it matches the **3.11+** requirement.
 
 ---
 
@@ -30,15 +34,16 @@ make run               # open http://localhost:5050
 - Credentials stay in your browser's `sessionStorage` or `.env` — never written to disk server-side.
 - Hybrid parsing: rule-based first, AI assist only when confidence is low.
 - Tool safety profile: sandboxed file paths and blocked dangerous shell commands by default.
-- Pytest suite + GitHub Actions CI (ruff + pytest on Python 3.9 & 3.11).
+- Pytest suite + GitHub Actions CI (ruff + pytest on Python 3.11).
 
 ## Install
 
-Requires Python 3.9+.
+Requires Python 3.11+.
 
 ```bash
 git clone https://github.com/KMeltzer24/workflowMVP.git
 cd workflowMVP
+python3.11 -m venv .venv && source .venv/bin/activate   # recommended
 pip install -r requirements.txt
 cp .env.example .env
 ```
@@ -79,7 +84,7 @@ Open <http://localhost:5050>.
 1. **Create** tab — write a numbered workflow or upload a screen-capture video, then click *Parse*. Edit any step inline before generating.
 2. **Generate Python code** — sends the parsed steps to the configured LLM and writes a script to `data/generated_workflows/`.
 3. **Run** tab — executes the script in a sandboxed `data/temp_outputs/<run_id>/` directory. Output streams live. Artifacts persist until server shutdown or `/api/cleanup`.
-4. **Examples** tab — four ready-to-run workflows, including one that demonstrates the inline SMTP credential prompt.
+4. **Examples** tab — seven ready-to-run workflows, including SMTP and notification demos.
 5. **Tools** tab — browse every tool available to generated code.
 6. **Settings** — enter Gemini/SMTP credentials for the browser session. Provider keys (Groq/OpenRouter) are set via `.env`.
 
@@ -93,12 +98,16 @@ Open <http://localhost:5050>.
 
 Paste into the Create tab → *Parse workflow* → *Generate Python code* → *Run*.
 
+## HTTP API
+
+Routes are implemented in `main.py`; the web UI calls them from `web/static/js/app.js`. POST bodies may include a `credentials` object — those values are merged into the workflow subprocess environment and are not written to disk.
+
 ## Development
 
 ```bash
 pip install -r requirements-dev.txt
-pytest          # run all tests
-ruff check .    # lint
+pytest          # run all tests (use `python -m pytest` if `pytest` is not on PATH)
+ruff check .    # lint (`python -m ruff check .` if needed)
 make clean      # wipe generated scripts, temp outputs, and caches
 ```
 

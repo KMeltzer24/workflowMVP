@@ -1,5 +1,8 @@
 .PHONY: help install dev run debug test lint format clean
 
+# Prefer project venv when present (Python 3.11+).
+PYTHON := $(if $(wildcard .venv/bin/python),.venv/bin/python,python3)
+
 PORT ?= 5050
 LLM_PROVIDER ?= gemini
 LLM_MODEL ?=
@@ -36,27 +39,27 @@ help:
 	@echo "Optional model override: make run LLM_PROVIDER=openrouter LLM_MODEL=meta-llama/llama-3.1-70b-instruct"
 
 install:
-	python3 -m pip install -r requirements.txt
+	$(PYTHON) -m pip install -r requirements.txt
 
 dev:
-	python3 -m pip install -r requirements-dev.txt
+	$(PYTHON) -m pip install -r requirements-dev.txt
 
 run:
-	LLM_PROVIDER=$(LLM_PROVIDER) LLM_MODEL="$(LLM_MODEL)" python3 main.py --port $(PORT)
+	LLM_PROVIDER=$(LLM_PROVIDER) LLM_MODEL="$(LLM_MODEL)" $(PYTHON) main.py --port $(PORT)
 
 debug:
-	LLM_PROVIDER=$(LLM_PROVIDER) LLM_MODEL="$(LLM_MODEL)" python3 main.py --debug --port $(PORT)
+	LLM_PROVIDER=$(LLM_PROVIDER) LLM_MODEL="$(LLM_MODEL)" $(PYTHON) main.py --debug --port $(PORT)
 
 test:
-	pytest
+	$(PYTHON) -m pytest
 
 lint:
-	ruff check .
+	$(PYTHON) -m ruff check .
 
 format:
-	ruff format .
+	$(PYTHON) -m ruff format .
 
 clean:
-	python3 -c "from main import cleanup_files; cleanup_files()"
+	$(PYTHON) -c "from main import cleanup_files; cleanup_files()"
 	rm -rf .pytest_cache .ruff_cache
 	find . -type d -name "__pycache__" -prune -exec rm -rf {} +

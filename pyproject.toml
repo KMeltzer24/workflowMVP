@@ -7,7 +7,7 @@ name = "workflowmvp"
 version = "0.2.0"
 description = "Turn screen-capture videos or text descriptions into executable Python workflows using Google's Gemini AI."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Kevin Meltzer", email = "kevinmeltzer1@gmail.com" }]
 keywords = ["workflow", "automation", "gemini", "ai", "flask"]
@@ -17,8 +17,6 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Framework :: Flask",
@@ -53,7 +51,7 @@ py-modules = ["main"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py39"
+target-version = "py311"
 extend-exclude = [
     "data",
     "workflow_videos",
@@ -72,9 +70,9 @@ select = [
 ignore = [
     "E501",   # line-too-long (long prompts/docstrings are fine)
     "B008",   # default arg as function call (Flask patterns)
-    "UP006",  # typing.Dict -> dict[] (we still support py3.9)
-    "UP035",  # typing deprecated-imports (same reason as UP006)
-    "UP045",  # typing.Optional -> X | None (ditto)
+    "UP006",  # Dict/List in annotations (style; optional modernize later)
+    "UP035",  # typing imports deprecated in favor of builtins
+    "UP045",  # Optional[X] vs X | None (style)
 ]
 
 [tool.ruff.lint.per-file-ignores]
