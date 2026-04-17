@@ -344,6 +344,38 @@ CRITICAL REQUIREMENTS:
    - CRITICAL: Extract recipient, subject, and body from step descriptions
    - Look for patterns like "enter `email@example.com`" or "enter 'email@example.com'"
    - Use the EXACT values from the step descriptions, not generic placeholders
+11. For writing, summarising, translating, or any creative/language task, use generate_text:
+   ```python
+   gen_tool = tools.get_tool('generate_text')
+   result = gen_tool.function(prompt="Write a limerick about the S&P 500 closing at 5432.10")
+   if result.get('success'):
+       text = result['result']
+   ```
+12. For calling REST APIs, sending webhooks, or any HTTP POST/PUT/DELETE, use http_request:
+   ```python
+   api_tool = tools.get_tool('http_request')
+   result = api_tool.function(
+       url='https://hooks.slack.com/services/...',
+       method='POST',
+       body={'text': 'Hello from WorkflowMVP'},
+   )
+   # For authenticated APIs, pass headers:
+   result = api_tool.function(
+       url='https://api.github.com/repos/owner/repo/issues',
+       method='POST',
+       body={'title': 'Bug report', 'body': 'Details...'},
+       headers={'Authorization': 'Bearer ' + os.getenv('GITHUB_TOKEN', '')},
+   )
+   ```
+13. For financial/stock data, ALWAYS prefer fetch_stock_price over scrape_webpage:
+   ```python
+   stock_tool = tools.get_tool('fetch_stock_price')
+   result = stock_tool.function(ticker='^GSPC')  # S&P 500
+   if result.get('success'):
+       price = result['price']   # float, e.g. 5432.10
+       name  = result['name']    # str, e.g. "S&P 500"
+   ```
+   Common tickers: ^GSPC (S&P 500), ^DJI (Dow Jones), ^IXIC (Nasdaq), BTC-USD (Bitcoin), AAPL, TSLA
 9. Use meaningful variable names and add high-level logging for major accomplishments only:
    ```python
    # LOG THESE: Major operations and results

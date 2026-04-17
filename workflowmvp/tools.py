@@ -111,15 +111,31 @@ class ToolRegistry:
 
         return normalized
 
-    @staticmethod
+    _BROWSER_HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+    }
+
+    @classmethod
     def _request_with_retry(
-        url: str, timeout: int = 30, attempts: int = 3, base_backoff: float = 0.4
+        cls,
+        url: str,
+        timeout: int = 30,
+        attempts: int = 3,
+        base_backoff: float = 0.4,
+        headers: Optional[Dict[str, str]] = None,
     ) -> requests.Response:
         """GET a URL with exponential backoff for transient request failures."""
+        merged_headers = {**cls._BROWSER_HEADERS, **(headers or {})}
         last_exc: Optional[Exception] = None
         for attempt in range(1, attempts + 1):
             try:
-                response = requests.get(url, timeout=timeout)
+                response = requests.get(url, timeout=timeout, headers=merged_headers)
                 response.raise_for_status()
                 return response
             except requests.RequestException as exc:
@@ -390,6 +406,54 @@ class ToolRegistry:
                 "selector": "CSS selector for specific elements (optional)",
                 "extract_text": "Extract text content (default: True)"
             }
+        ))
+
+        # HTTP / API tools
+        self.register_tool(Tool(
+            name="http_request",
+            description=(
+                "Make an HTTP request (GET, POST, PUT, PATCH, DELETE) to any URL. "
+                "Use this to call REST APIs, send webhooks, or submit forms. "
+                "Supports custom headers and a JSON or text body."
+            ),
+            function=self._http_request,
+            parameters={
+                "url": "Target URL",
+                "method": "HTTP method: GET, POST, PUT, PATCH, DELETE (default: GET)",
+                "body": "Request body as a dict (sent as JSON) or string (sent as text). Optional.",
+                "headers": "Extra headers as a dict (e.g. {'Authorization': 'Bearer token'}). Optional.",
+                "timeout": "Timeout in seconds (default: 30)",
+            },
+        ))
+
+        # AI text generation
+        self.register_tool(Tool(
+            name="generate_text",
+            description=(
+                "Generate text using the configured AI model (Gemini / Groq / OpenRouter). "
+                "Use for writing, summarising, translating, classifying, formatting data as prose, "
+                "or any task that requires language understanding. "
+                "Pass the full instruction in 'prompt'; the model returns plain text."
+            ),
+            function=self._generate_text,
+            parameters={
+                "prompt": "Full instruction for the AI (e.g. 'Write a limerick about 5432.10')",
+                "max_tokens": "Maximum tokens to generate (default: 1000)",
+            },
+        ))
+
+        # Financial data
+        self.register_tool(Tool(
+            name="fetch_stock_price",
+            description=(
+                "Fetch the current or recent price of a stock or index using its ticker symbol "
+                "(e.g. ^GSPC for S&P 500, AAPL for Apple). Returns price, currency, and metadata."
+            ),
+            function=self._fetch_stock_price,
+            parameters={
+                "ticker": "Ticker symbol (e.g. '^GSPC', 'AAPL', 'BTC-USD')",
+                "period": "Data period: '1d', '5d', '1mo', etc. (default: '1d')",
+            },
         ))
 
         # Notification tools
@@ -839,6 +903,151 @@ class ToolRegistry:
                 return {"success": True, "content": response.text, "url": url, "note": "CSS selector parsing not implemented"}
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    def _generate_text(self, prompt: str, max_tokens: int = 1000) -> Dict[str, Any]:
+        """Call the configured LLM to generate text."""
+        try:
+            provider = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
+            api_key = None
+            if provider == "gemini":
+                api_key = os.getenv("GEMINI_API_KEY")
+            elif provider == "groq":
+                api_key = os.getenv("GROQ_API_KEY")
+            else:
+                provider = "openrouter"
+                api_key = os.getenv("OPENROUTER_API_KEY")
+
+            if not api_key:
+                return {
+                    "success": False,
+                    "error": (
+                        f"No API key found for provider '{provider}'. "
+                        "Set GEMINI_API_KEY / GROQ_API_KEY / OPENROUTER_API_KEY in .env."
+                    ),
+                }
+
+            if provider == "gemini":
+                import google.generativeai as genai
+
+                genai.configure(api_key=api_key)
+                model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+                model = genai.GenerativeModel(model_name)
+                response = model.generate_content(
+                    prompt,
+                    generation_config=genai.types.GenerationConfig(
+                        temperature=0.7,
+                        max_output_tokens=max_tokens,
+                    ),
+                )
+                text = response.text or ""
+            else:
+                if provider == "groq":
+                    url = "https://api.groq.com/openai/v1/chat/completions"
+                    model_name = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+                    extra_headers: Dict[str, str] = {}
+                else:
+                    url = "https://openrouter.ai/api/v1/chat/completions"
+                    model_name = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.1-70b-instruct")
+                    extra_headers = {
+                        "HTTP-Referer": os.getenv("OPENROUTER_SITE_URL", "http://localhost:5050"),
+                        "X-Title": os.getenv("OPENROUTER_APP_NAME", "WorkflowMVP"),
+                    }
+                headers = {
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    **extra_headers,
+                }
+                payload = {
+                    "model": model_name,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.7,
+                    "max_tokens": max_tokens,
+                }
+                resp = requests.post(url, headers=headers, json=payload, timeout=60)
+                resp.raise_for_status()
+                data = resp.json()
+                choices = data.get("choices") or []
+                if not choices:
+                    return {"success": False, "error": f"{provider} returned no choices."}
+                text = (choices[0].get("message") or {}).get("content", "") or ""
+
+            return {"success": True, "result": text.strip()}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+    def _http_request(
+        self,
+        url: str,
+        method: str = "GET",
+        body: Any = None,
+        headers: Optional[Dict[str, str]] = None,
+        timeout: int = 30,
+    ) -> Dict[str, Any]:
+        """Make an HTTP request with optional body and headers."""
+        try:
+            method = method.upper()
+            if method not in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"}:
+                return {"success": False, "error": f"Unsupported HTTP method: {method}"}
+
+            req_headers = {**self._BROWSER_HEADERS, **(headers or {})}
+
+            kwargs: Dict[str, Any] = {"timeout": timeout, "headers": req_headers}
+            if body is not None:
+                if isinstance(body, dict):
+                    kwargs["json"] = body
+                    req_headers.setdefault("Content-Type", "application/json")
+                else:
+                    kwargs["data"] = str(body)
+
+            response = requests.request(method, url, **kwargs)
+            content_type = response.headers.get("Content-Type", "")
+            if "application/json" in content_type:
+                try:
+                    result = response.json()
+                except Exception:
+                    result = response.text
+            else:
+                result = response.text
+
+            return {
+                "success": response.ok,
+                "status_code": response.status_code,
+                "result": result,
+                "error": None if response.ok else f"HTTP {response.status_code}: {response.reason}",
+            }
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+    def _fetch_stock_price(self, ticker: str, period: str = "1d") -> Dict[str, Any]:
+        """Fetch stock/index price via yfinance (no scraping, no rate-limits)."""
+        try:
+            import yfinance as yf  # optional dep; graceful error if missing
+        except ImportError:
+            return {
+                "success": False,
+                "error": (
+                    "yfinance is not installed. Run: pip3 install yfinance"
+                ),
+            }
+        try:
+            t = yf.Ticker(ticker)
+            hist = t.history(period=period)
+            if hist.empty:
+                return {"success": False, "error": f"No data returned for ticker '{ticker}'"}
+            latest = hist["Close"].iloc[-1]
+            info = t.fast_info
+            currency = getattr(info, "currency", "USD") or "USD"
+            name = getattr(info, "long_name", ticker) or ticker
+            return {
+                "success": True,
+                "ticker": ticker,
+                "name": name,
+                "price": round(float(latest), 2),
+                "currency": currency,
+                "period": period,
+            }
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
 
     # Notifications
     def _send_notification(self, title: str, message: str, urgency: str = "normal") -> Dict[str, Any]:
