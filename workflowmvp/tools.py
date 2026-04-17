@@ -13,15 +13,14 @@ import sqlite3
 import subprocess
 import sys
 import time
-from datetime import datetime
-from datetime import timezone as dt_timezone
-from zoneinfo import ZoneInfo
 import warnings
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Any, Callable, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 # macOS system Python is commonly linked against LibreSSL, which triggers a noisy
 # urllib3 warning on import. Suppress only that exact warning message.
@@ -643,7 +642,7 @@ class ToolRegistry:
         try:
             tz_name = (timezone or "UTC").strip()
             if tz_name.upper() in ("UTC", "GMT", "Z", "ZULU"):
-                now = datetime.now(dt_timezone.utc)
+                now = datetime.now(UTC)
                 tz_label = "UTC"
             else:
                 tz = ZoneInfo(tz_name)
