@@ -198,7 +198,7 @@ Rule-parser draft (for reference):
 Available tools:
 {tools_info}
 
-━━━ SCRIPT STRUCTURE ━━━
+## SCRIPT STRUCTURE
 
 Always begin with:
    import logging, json, os
@@ -214,23 +214,25 @@ Always end with a main() function and:
 
 Always use RELATIVE file paths ("report.txt", "data/output.csv"). Never hardcode absolute paths or /tmp.
 
-━━━ TOOL USAGE ━━━
+## TOOL USAGE
 
 Get tools like this — always use get_tool(), never use get():
    tools = ToolRegistry()
    dl = tools.get_tool('download')
    result = dl.function(url='https://example.com')
 
-Every tool returns a dict with 'success', 'error', and 'result' (or 'content') keys:
+Every tool call returns a dict that (after wrapping) always includes: success, error, result, and meta (use meta['tool'] for logging).
+On failure: success is False — read error and stop.
+On success: read result for the primary string/object output when set. Many tools also set extra keys on the same dict (e.g. read_json → data, fetch_stock_price → price/ticker/currency, read_pdf → text, render_template → rendered). Use those fields when documented for that tool.
+
    if not result.get('success'):
        logger.error(f"Failed: {{result.get('error')}}")
        return
-   value = result.get('result') or result.get('content')
 
-When a tool returns JSON text (e.g. download), parse the content string — not the result dict:
-   data = json.loads(result.get('result') or result.get('content', '{{}}'))
+When a tool returns JSON as text (e.g. download), parse from result:
+   data = json.loads(result.get('result') or '{{}}')
 
-━━━ SPECIFIC TOOL GUIDANCE ━━━
+## SPECIFIC TOOL GUIDANCE
 
 EMAIL — send_email: recipient, subject, body (plain text), plus optional attachments (list of relative file paths or one string path). Files are sent as real MIME attachments. You may use a short body like "See attached." when attaching. Without attachments, body carries the full message. Never invent email_from — omit it or use os.getenv('EMAIL_FROM').
    email_tool = tools.get_tool('send_email')
@@ -244,16 +246,11 @@ AI TEXT GENERATION — for any writing, summarising, translating, or creative ta
 SCRAPING — scrape_webpage strips HTML tags and returns clean readable text (up to 4000 chars).
    Always use the exact URL from the step description. Never guess or construct subpage paths.
    Slice before passing to generate_text:
-   content = (r.get('result') or r.get('content', ''))[:3000]
+   content = (r.get('result') or '')[:3000]
 
    AVOID scraping Google News / Google Search HTML (news.google.com/topics, /search?, etc.) — servers often return 400/403 to automated clients even with browser headers.
 
-NEWS HEADLINES (no URL in the workflow) — use download or http_request on a public RSS/XML feed, then summarize with generate_text. Example pattern:
-   dl = tools.get_tool('download')
-   r = dl.function(url='https://news.google.com/rss/search?q=artificial+intelligence&hl=en-US&gl=US&ceid=US:en')
-   raw = r.get('content') or r.get('result') or ''
-   # Pass raw (XML) to generate_text: "From this RSS XML, list and summarize the top 3 items..."
-   Or use another site's RSS/JSON API the user explicitly named.
+NEWS HEADLINES (no page URL in the workflow) — use download or http_request on a public RSS/Atom or JSON **feed URL** from the step (or a stable feed the user names). Pass the response body to generate_text to summarize. Do not scrape Google News HTML.
 
    CRITICAL: when building a generate_text prompt from scraped content, explicitly tell the model
    to use ONLY information found in the content and to state when details are missing — never
@@ -265,19 +262,19 @@ NEWS HEADLINES (no URL in the workflow) — use download or http_request on a pu
        f"Content:\\n{{content}}"
    ))
 
-STOCK / FINANCIAL DATA — always use fetch_stock_price, never scrape finance sites:
-   stock = tools.get_tool('fetch_stock_price')
-   r = stock.function(ticker='SPY')          # latest close
-   price = r['price'] if r.get('success') else None
-   # Common tickers: ^GSPC S&P500, ^DJI Dow, ^IXIC Nasdaq, BTC-USD Bitcoin
-
-PRICE COMPARISON — for "up or down vs N days ago", use yfinance directly in the script:
+STOCK / FINANCIAL DATA — prefer fetch_stock_price over scraping finance websites.
+- **Single latest close:** fetch_stock_price(ticker='SPY', period='1d'). On success read price, ticker, and currency from the returned dict. Common tickers: ^GSPC, ^DJI, ^IXIC, BTC-USD.
+- **Multi-bar math** (e.g. compare first vs last close in the same history window): import yfinance as yf inside the script and use Ticker(...).history(period=...). Use yfinance only for this price series, not for scraping webpages. fetch_stock_price exposes the latest bar from its window, not the full DataFrame for custom comparisons.
    import yfinance as yf
    hist = yf.Ticker('SPY').history(period='5d')
    price_now   = float(hist['Close'].iloc[-1])
    price_then  = float(hist['Close'].iloc[0])
    change      = price_now - price_then
    direction   = 'up' if change >= 0 else 'down'
+
+PDF — read_pdf: pass file_path and optional pages (range string or list). Extracted text is in result (and text).
+
+TEMPLATES — render_template: pass template (Jinja2 string) and variables dict. Missing variable names fail (StrictUndefined). Output string is in result (and rendered).
 
 HTTP / REST APIs — use http_request for any POST/PUT/DELETE or API with auth:
    api = tools.get_tool('http_request')
@@ -296,7 +293,7 @@ FILE INTEGRITY — hash_file(file_path='backup.zip', algorithm='sha256') returns
 
 DATE & TIME — get_current_time(timezone='America/Los_Angeles') returns iso, unix, timezone (IANA names). Use for timestamps in reports and emails.
 
-━━━ RECORDINGS VS. INTENT (UI-HEAVY STEPS) ━━━
+## RECORDINGS VS. INTENT (UI-HEAVY STEPS)
 
 If steps read like a **screen recording** (Navigate, Type in search bar, Gmail compose, "Enter X into To/Subject/Body",
 long google.com URLs with tracking params, many consecutive `custom` steps before `send_email`):
@@ -306,7 +303,7 @@ long google.com URLs with tracking params, many consecutive `custom` steps befor
 
 Constants vs. dynamic: use descriptions **exactly** for stable user data (emails, file paths, API URLs, tickers). Recompute anything that depends on "now" or on-page search results.
 
-━━━ LOGGING ━━━
+## LOGGING
 
 Log major milestones only — not every sub-step:
    logger.info("Fetching SPY price...")
@@ -314,7 +311,7 @@ Log major milestones only — not every sub-step:
    logger.info("Sending email...")
    logger.info("✅ Email sent to you@example.com")
 
-━━━ OUTPUT ━━━
+## OUTPUT
 
 Generate ONLY the Python script — no markdown, no explanation, no comments beyond what is needed.
 Extract exact values from step descriptions for **stable** fields only; compute time-sensitive and lookup-dependent content at runtime — never use placeholders for data you can compute."""
@@ -330,6 +327,6 @@ Extract exact values from step descriptions for **stable** fields only; compute 
         )
         return (
             f"Generate a Python script for this workflow:\n{steps_text}\n"
-            "Use exact values from descriptions for stable user-supplied data (emails, paths, tickers, API URLs). "
-            "If steps look UI-heavy or transcript-like, implement intent with fresh computation — do not replay every UI step or paste stale times/countdowns from the text."
+            "Follow SCRIPT STRUCTURE, TOOL USAGE, and SPECIFIC TOOL GUIDANCE above. "
+            "For UI-heavy or transcript-like steps, apply ## RECORDINGS VS. INTENT."
         )
