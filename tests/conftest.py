@@ -9,6 +9,17 @@ from __future__ import annotations
 import os
 import sys
 
+import pytest
+
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
+
+import main  # noqa: E402  # import after sys.path so `main` resolves
+
+
+@pytest.fixture()
+def client():
+    main.app.config["TESTING"] = True
+    with main.app.test_client() as test_client:
+        yield test_client

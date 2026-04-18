@@ -4,15 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-import main
-
-
-@pytest.fixture()
-def client():
-    main.app.config["TESTING"] = True
-    with main.app.test_client() as test_client:
-        yield test_client
-
 
 def test_tools_endpoint(client) -> None:
     response = client.get("/api/tools")

@@ -16,16 +16,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-import main
 from workflowmvp import video_to_workflow as vtw
-
-
-@pytest.fixture()
-def client():
-    main.app.config["TESTING"] = True
-    with main.app.test_client() as test_client:
-        yield test_client
-
 
 # ---------------------------------------------------------------------------
 # API error paths

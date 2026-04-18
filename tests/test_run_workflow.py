@@ -8,16 +8,7 @@ import os
 import textwrap
 from pathlib import Path
 
-import pytest
-
 import main
-
-
-@pytest.fixture()
-def client():
-    main.app.config["TESTING"] = True
-    with main.app.test_client() as test_client:
-        yield test_client
 
 
 def _write_generated_script(tmpdir: Path) -> Path:
