@@ -19,6 +19,50 @@ _SCENE_CHANGE_MIN = 0.18
 # Compare downscaled frames so 4K recordings stay fast.
 _COMPARE_MAX_SIDE = 480
 
+_DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+_GEMINI_VIDEO_TEMPERATURE = 0.1
+_GEMINI_VIDEO_MAX_OUTPUT_TOKENS = 2048
+
+
+def _resolve_gemini_model(model: Optional[str]) -> str:
+    return (model or os.getenv("GEMINI_MODEL", _DEFAULT_GEMINI_MODEL)).strip()
+
+
+def _video_workflow_prompt(frame_count: int) -> str:
+    """Instructions for Gemini vision: outcome-oriented workflow text from key frames."""
+    return f"""You are analyzing {frame_count} screenshots from a screen recording.
+
+## Task
+Infer the **outcome** the user wants (what to accomplish), not a play-by-play of clicks and keystrokes.
+
+## Rules
+- **No frozen facts:** on-screen times, countdowns, snippets, and search results are stale after the recording. Describe **what to compute at run time**, not literals copied from the UI.
+- **Intent from UI:** use visible queries, headings, and geography to infer goals (e.g. local vs exchange/session clock, regions, IANA timezones when appropriate). Keep “user local” and “market/session close” separate when both matter.
+- **Email addresses:** copy the visible **To:** / recipient field **exactly** (character by character). Digits in the local-part (e.g. `kevinmeltzer` vs `kevinmeltzer1`) are easy to misread from video — double-check. Do not “normalize” or substitute a different address.
+- **Email:** if mail compose or send appears, end with **send email** using that recipient and subject **themes** from the recording; body instructions must **derive** content from earlier computational steps.
+- **Scope:** automate the goal, not every hover, type, or click. Search + email flows → gather or compute facts, then one email, unless true browser automation is required.
+- **Stable data:** preserve emails, paths, tickers, explicit API URLs, and subject themes visible in the UI.
+- **URLs:** prefer explicit feeds or API URLs over long tracked portal URLs when summarizing external content.
+- **Implementability:** each step must be doable with Python stdlib, HTTP, files, email, and this app’s tool layer — **no** reliance on unspecified third-party packages.
+
+## Output format
+Number steps (1., 2., 3., …). For email steps: recipient, subject intent, and body tied to **computed** earlier steps — never paste transcript text as fixed truth.
+
+## Pattern examples (not exhaustive)
+✓ Current local time in the timezone implied by searches or visible locale in the recording.
+✓ Next nominal regular-session US equity close and minutes until then at run time (state simplifying assumptions in the step text).
+✓ Send email to … with subject …; body uses computed times and intervals.
+✗ A permanent answer copied from an on-screen countdown (e.g. “22 minutes”).
+✗ Many steps that only narrate typing and clicking with no runnable outcome.
+
+Generate the workflow text now.""".strip()
+
+
+def _ensure_parent_dir(path: str) -> None:
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+
 
 def _resize_for_compare(frame: np.ndarray) -> np.ndarray:
     """Downscale BGR frame for cheaper difference metrics."""
@@ -52,7 +96,6 @@ def calculate_frame_difference(frame1: np.ndarray, frame2: np.ndarray) -> float:
         g2 = gray2.astype(np.float32) / 255.0
         mse = float(np.mean((g1 - g2) ** 2))
 
-        # Combine: histogram shift + pixel MSE (capped to keep scale sane)
         combined = 0.45 * hist_diff + 0.55 * min(mse * 4.0, 1.0)
         return float(min(combined, 1.0))
     except Exception:
@@ -89,7 +132,6 @@ def sample_frames_intelligent(video_path: str, max_frames: int = 15) -> Tuple[Li
     cv2.imwrite(first_path, first_frame, encode_params)
     selected_frames.append(first_path)
 
-    # Candidate timestamps (indices) — scan more positions than we will keep.
     key_positions: List[int] = []
     if duration > 10:
         for pct in (0.1, 0.25, 0.4, 0.6, 0.75, 0.9):
@@ -99,7 +141,6 @@ def sample_frames_intelligent(video_path: str, max_frames: int = 15) -> Tuple[Li
         key_positions = list(range(interval, max(total_frames - interval, 1), interval))
 
     last_kept = first_frame
-    # Reserve one slot for the final frame.
     max_middle = max(0, max_frames - 2)
 
     for pos in key_positions:
@@ -134,46 +175,11 @@ def sample_frames_intelligent(video_path: str, max_frames: int = 15) -> Tuple[Li
     return selected_frames, tmpdir
 
 
-def sample_frames(video_path: str, max_frames: int = 12) -> List[str]:
-    """Legacy function for backward compatibility"""
-    frames, _ = sample_frames_intelligent(video_path, max_frames)
-    return frames
-
-
 def infer_workflow_from_frames(frame_paths: List[str], api_key: str, model: Optional[str] = None) -> str:
     """Analyze video frames and infer an outcome-oriented workflow (not UI replay)."""
-    model = model or os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    resolved = _resolve_gemini_model(model)
     client = genai.Client(api_key=api_key)
-
-    # Goal-oriented steps: recordings demonstrate intent; runnable code must use fresh data.
-    prompt = f"""You are analyzing {len(frame_paths)} screenshots from a screen recording.
-
-TASK: Infer what the user wants **accomplished** (the outcome), not a play-by-play of every click or keystroke.
-
-CRITICAL — DO NOT FREEZE FACTS FROM THE VIDEO:
-- Text visible in Google results, countdowns, "closes in N minutes", clocks, or snippets are **stale** the moment the recording ends.
-- Never copy those numbers or times into the workflow as if they were permanent truth. Phrase steps as **what to compute or look up at run time** (e.g. current time in Seattle, minutes until today's US stock market close).
-- Prefer **one concise email step** whose body should **summarize computed results**, not paste literal on-screen sentences from the recording.
-
-ANALYSIS GUIDELINES:
-1. Infer the end goal (e.g. "email myself how long until market close") vs. the UI path used to get there.
-2. If the recording is mostly browser search + Gmail compose, collapse to: gather/compute the needed facts, then send email — avoid steps like "type into search bar" unless browser automation is truly required.
-3. Preserve **stable** user choices: recipient email, subject *theme*, city/timezone names, ticker symbols, file names.
-4. For APIs or downloads, prefer **explicit HTTPS URLs** when the user clearly used a public API; avoid long session-specific Google URLs with tracking parameters.
-
-OUTPUT FORMAT:
-- Number each step (1., 2., 3., …).
-- Each step is outcome-oriented and implementable in Python (stdlib, HTTP APIs, file I/O, email).
-- If email is involved: name recipient, subject line intent, and that the **body must reflect values computed in earlier steps** — do not embed literal countdown or search-result text from the video.
-
-EXAMPLES:
-✓ "Get current local time for America/Los_Angeles (Seattle)."
-✓ "Determine the next regular-session US equity market close (NYSE, Eastern Time) and compute minutes from now until that close."
-✓ "Send email to user@example.com with subject 'Market close' and body stating the computed time and minutes remaining (no placeholder numbers)."
-✗ "Enter 'The stock market closes in 22 mins' in the email body" (that is a recording artifact — wrong for automation)
-✗ Eight steps that only describe clicking and typing in Google and Gmail (too literal)
-
-Now analyze these {len(frame_paths)} screenshots and generate the workflow:"""
+    prompt = _video_workflow_prompt(len(frame_paths))
 
     contents: List[Any] = [prompt]
 
@@ -185,11 +191,11 @@ Now analyze these {len(frame_paths)} screenshots and generate the workflow:"""
 
         print("🤖 Analyzing frames with AI...")
         resp = client.models.generate_content(
-            model=model,
+            model=resolved,
             contents=contents,
             config=types.GenerateContentConfig(
-                temperature=0.1,
-                max_output_tokens=1500,
+                temperature=_GEMINI_VIDEO_TEMPERATURE,
+                max_output_tokens=_GEMINI_VIDEO_MAX_OUTPUT_TOKENS,
             ),
         )
 
@@ -199,7 +205,6 @@ Now analyze these {len(frame_paths)} screenshots and generate the workflow:"""
 
     except Exception as e:
         print(f"❌ Error during AI analysis: {e}")
-        # Return a basic fallback workflow
         return f"""Error analyzing video frames: {str(e)}
 
 Fallback workflow:
@@ -212,26 +217,14 @@ Please check your API key and try again with a clearer video."""
 
 
 def video_to_workflow_txt(video_path: str, output_txt: str, api_key: str, model: Optional[str] = None) -> str:
-    """
-    Convert video to workflow text with improved error handling and cleanup
-    """
-    model = model or os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    """Convert video to workflow text; writes output file or a fallback on failure."""
     temp_dir: Optional[str] = None
     try:
         print(f"🎥 Processing video: {video_path}")
 
-        # Validate video file
         if not os.path.exists(video_path):
             raise FileNotFoundError(f"Video file not found: {video_path}")
 
-        # Check if video is readable
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            cap.release()
-            raise ValueError(f"Cannot open video file: {video_path}")
-        cap.release()
-
-        # Use intelligent frame sampling
         frames, temp_dir = sample_frames_intelligent(video_path, max_frames=15)
 
         if not frames:
@@ -242,10 +235,7 @@ def video_to_workflow_txt(video_path: str, output_txt: str, api_key: str, model:
         if not steps_text or len(steps_text.strip()) < 10:
             raise ValueError("AI analysis produced no meaningful workflow")
 
-        # Ensure output directory exists
-        os.makedirs(os.path.dirname(output_txt), exist_ok=True)
-
-        # Write the workflow text
+        _ensure_parent_dir(output_txt)
         with open(output_txt, "w", encoding="utf-8") as f:
             f.write(steps_text.strip() + "\n")
 
@@ -254,7 +244,6 @@ def video_to_workflow_txt(video_path: str, output_txt: str, api_key: str, model:
     except Exception as e:
         print(f"❌ Video processing failed: {e}")
 
-        # Create a fallback workflow file
         fallback_content = f"""# Video processing failed: {str(e)}
 
 # Fallback workflow - please edit manually:
@@ -271,19 +260,17 @@ def video_to_workflow_txt(video_path: str, output_txt: str, api_key: str, model:
 """
 
         try:
-            os.makedirs(os.path.dirname(output_txt), exist_ok=True)
+            _ensure_parent_dir(output_txt)
             with open(output_txt, "w", encoding="utf-8") as f:
                 f.write(fallback_content)
         except Exception:
             pass
 
-        raise  # Re-raise the original exception
+        raise
 
     finally:
-        # Clean up temporary files
         if temp_dir and os.path.exists(temp_dir):
             try:
                 shutil.rmtree(temp_dir)
             except Exception:
                 pass
-

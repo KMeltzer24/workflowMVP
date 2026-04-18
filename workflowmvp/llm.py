@@ -13,6 +13,7 @@ Design goals:
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any, Dict, Optional
 
@@ -48,6 +49,21 @@ CHAT_COMPLETION_URLS = {
 def required_api_key_name(provider: str) -> str:
     """Return the env var name that holds the API key for `provider`."""
     return API_KEY_ENV_KEYS.get(provider, "GEMINI_API_KEY")
+
+
+def _quiet_third_party_loggers() -> None:
+    """Lower httpx / Google GenAI SDK noise when running workflows in the UI."""
+    flag = (os.getenv("WORKFLOW_QUIET_LOGGERS") or "").strip().lower()
+    if flag not in ("1", "true", "yes"):
+        return
+    for name in (
+        "httpx",
+        "httpcore",
+        "urllib3",
+        "google_genai",
+        "google_genai.models",
+    ):
+        logging.getLogger(name).setLevel(logging.WARNING)
 
 
 class LLMClient:
@@ -102,6 +118,7 @@ class LLMClient:
         config errors and HTTP errors for network failures.
         """
         self.require_configured()
+        _quiet_third_party_loggers()
         if self.provider == "gemini":
             return self._call_gemini(prompt, max_tokens, temperature)
         return self._call_openai_compatible(prompt, max_tokens, temperature)

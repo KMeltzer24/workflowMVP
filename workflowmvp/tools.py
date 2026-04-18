@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+from urllib.parse import urldefrag, urljoin, urlparse, urlunparse
 import shutil
 import smtplib
 import sqlite3
@@ -388,6 +389,26 @@ class ToolRegistry:
             parameters={
                 "url": "URL to scrape",
             }
+        ))
+
+        self.register_tool(Tool(
+            name="discover_urls",
+            description=(
+                "Find candidate URLs on a public website without deep crawling: reads sitemap.xml "
+                "(and sitemap index) plus same-origin links from the given page, then ranks URLs "
+                "using optional keywords (e.g. festival name words). Use before scrape_webpage when "
+                "the step names an org but not a specific program page."
+            ),
+            function=self._discover_urls,
+            parameters={
+                "start_url": "Entry URL (e.g. https://www.example.org/)",
+                "keywords": (
+                    "Optional: comma/space-separated words to rank URLs (e.g. sci-fi fantasy festival)"
+                ),
+                "max_results": "Max URLs to return (default 15, cap 50)",
+                "use_sitemap": "If true (default), try /sitemap.xml and /sitemap_index.xml",
+                "use_page_links": "If true (default), extract same-origin links from start_url HTML",
+            },
         ))
 
         # HTTP / API tools
@@ -1160,6 +1181,197 @@ class ToolRegistry:
             return result
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    _SITEMAP_LOC_RE = re.compile(r"<loc[^>]*>\s*([^<\s]+)\s*</loc>", re.IGNORECASE)
+    _DISCOVER_MAX_SITEMAP_LOCS = 2500
+    _DISCOVER_MAX_CHILD_SITEMAPS = 8
+
+    @staticmethod
+    def _discover_keyword_tokens(keywords: Optional[str]) -> List[str]:
+        if not keywords or not str(keywords).strip():
+            return []
+        raw = re.split(r"[\s,;]+", str(keywords).lower())
+        out: List[str] = []
+        for t in raw:
+            t = t.strip().strip("'\"")
+            if len(t) >= 2:
+                out.append(t)
+        seen: set[str] = set()
+        uniq: List[str] = []
+        for t in out:
+            if t not in seen:
+                seen.add(t)
+                uniq.append(t)
+        return uniq[:24]
+
+    @staticmethod
+    def _discover_score(url: str, link_text: str, tokens: List[str]) -> int:
+        if not tokens:
+            return 0
+        blob = f"{url} {link_text}".lower()
+        return sum(1 for t in tokens if t in blob)
+
+    def _normalize_discover_url(self, raw: str, allowed_netloc: str) -> Optional[str]:
+        raw = (raw or "").strip()
+        if not raw:
+            return None
+        u, _frag = urldefrag(raw)
+        p = urlparse(u)
+        if p.scheme not in ("http", "https"):
+            return None
+        if p.netloc.lower() != allowed_netloc.lower():
+            return None
+        path = p.path or "/"
+        return urlunparse((p.scheme, p.netloc.lower(), path, "", p.query, ""))
+
+    def _collect_sitemap_locs(self, base: str, allowed_netloc: str) -> List[str]:
+        """Return page URLs from sitemap.xml, expanding sitemap index one level."""
+        out: List[str] = []
+        for sm_path in (f"{base}/sitemap.xml", f"{base}/sitemap_index.xml"):
+            try:
+                resp = self._request_with_retry(sm_path, timeout=15, attempts=2)
+            except Exception:
+                continue
+            body = resp.text
+            locs = self._SITEMAP_LOC_RE.findall(body)
+            if not locs:
+                continue
+            lower_head = body.lower()[:4000]
+            if "sitemapindex" in lower_head:
+                page_locs: List[str] = []
+                for child in locs[: self._DISCOVER_MAX_CHILD_SITEMAPS]:
+                    c = child.strip()
+                    cp = urlparse(c)
+                    if cp.netloc and cp.netloc.lower() != allowed_netloc.lower():
+                        continue
+                    try:
+                        r2 = self._request_with_retry(c.strip(), timeout=15, attempts=2)
+                        page_locs.extend(self._SITEMAP_LOC_RE.findall(r2.text))
+                    except Exception:
+                        continue
+                    if len(page_locs) >= self._DISCOVER_MAX_SITEMAP_LOCS:
+                        break
+                locs = page_locs
+            for loc in locs[: self._DISCOVER_MAX_SITEMAP_LOCS]:
+                nu = self._normalize_discover_url(loc, allowed_netloc)
+                if nu:
+                    out.append(nu)
+            if out:
+                break
+        return out
+
+    def _collect_page_links(self, start_url: str, allowed_netloc: str) -> List[tuple]:
+        """Return (normalized_url, link_text) from same-origin anchors."""
+        pairs: List[tuple] = []
+        try:
+            resp = self._request_with_retry(start_url, timeout=20, attempts=2)
+        except Exception:
+            return pairs
+        html = resp.text
+        try:
+            from bs4 import BeautifulSoup
+
+            soup = BeautifulSoup(html, "html.parser")
+            for a in soup.find_all("a", href=True):
+                href = (a.get("href") or "").strip()
+                if not href or href.startswith("#") or href.lower().startswith("javascript:"):
+                    continue
+                full = urljoin(start_url, href)
+                text = a.get_text(" ", strip=True)[:240]
+                nu = self._normalize_discover_url(full, allowed_netloc)
+                if nu:
+                    pairs.append((nu, text))
+        except ImportError:
+            for m in re.finditer(r"""href\s*=\s*["']([^"']+)["']""", html, re.I):
+                href = m.group(1).strip()
+                if not href or href.startswith("#") or href.lower().startswith("javascript:"):
+                    continue
+                full = urljoin(start_url, href)
+                nu = self._normalize_discover_url(full, allowed_netloc)
+                if nu:
+                    pairs.append((nu, ""))
+        return pairs
+
+    @staticmethod
+    def _coerce_tool_bool(value: Any, default: bool) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        s = str(value).strip().lower()
+        if s in ("0", "false", "no", "off", ""):
+            return False
+        if s in ("1", "true", "yes", "on"):
+            return True
+        return default
+
+    def _discover_urls(
+        self,
+        start_url: str,
+        keywords: Optional[str] = None,
+        max_results: int = 15,
+        use_sitemap: bool = True,
+        use_page_links: bool = True,
+    ) -> Dict[str, Any]:
+        """Bounded URL discovery: sitemap + same-origin links, keyword-ranked."""
+        try:
+            use_sitemap = self._coerce_tool_bool(use_sitemap, True)
+            use_page_links = self._coerce_tool_bool(use_page_links, True)
+            start_url = (start_url or "").strip()
+            parsed = urlparse(start_url)
+            if not parsed.scheme or not parsed.netloc:
+                return {
+                    "success": False,
+                    "error": "start_url must include scheme and host (e.g. https://www.example.org/)",
+                }
+            allowed_netloc = parsed.netloc.lower()
+            base = f"{parsed.scheme}://{allowed_netloc}".rstrip("/")
+            try:
+                mr = int(max_results)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                mr = 15
+            max_results = max(1, min(mr, 50))
+            tokens = self._discover_keyword_tokens(keywords)
+            best_score: Dict[str, int] = {}
+
+            def note(u: str, link_text: str = "") -> None:
+                s = self._discover_score(u, link_text, tokens)
+                if u not in best_score or s > best_score[u]:
+                    best_score[u] = s
+
+            if use_sitemap:
+                for u in self._collect_sitemap_locs(base, allowed_netloc):
+                    note(u, "")
+
+            if use_page_links:
+                for u, lt in self._collect_page_links(start_url, allowed_netloc):
+                    note(u, lt)
+
+            if not best_score:
+                return {
+                    "success": False,
+                    "error": (
+                        "No same-origin URLs found (missing sitemap, blocked, or no parseable links). "
+                        "Try another start_url or add an explicit page URL to the workflow step."
+                    ),
+                }
+
+            ranked = sorted(
+                best_score.items(),
+                key=lambda kv: (-kv[1], len(kv[0])),
+            )
+            top = ranked[:max_results]
+            out_list = [{"url": u, "score": s} for u, s in top]
+            summary = json.dumps(out_list, indent=2)
+            return {
+                "success": True,
+                "urls": out_list,
+                "count": len(out_list),
+                "result": summary,
+                "start_url": start_url,
+            }
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
 
     def _generate_text(self, prompt: str, max_tokens: int = 1000) -> Dict[str, Any]:
         """Call the configured LLM to generate text via the shared LLMClient."""

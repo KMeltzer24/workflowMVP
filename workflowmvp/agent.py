@@ -52,6 +52,7 @@ class WorkflowAgent:
         )
         if not generated_code:
             raise ValueError("Model returned empty code.")
+        self._validate_generated_python(generated_code)
 
         with open(output_file, "w", encoding="utf-8") as f:
             f.write(generated_code)
@@ -165,6 +166,18 @@ Rule-parser draft (for reference):
         return raw.strip()
 
     @staticmethod
+    def _validate_generated_python(code: str) -> None:
+        """Reject truncated or malformed scripts before they are written to disk."""
+        try:
+            compile(code, "<generated_workflow>", "exec")
+        except SyntaxError as exc:
+            raise ValueError(
+                "Generated code is not valid Python (often truncated output). "
+                f"Syntax error at line {exc.lineno}: {exc.msg}. "
+                "Click Generate again, or shorten/simplify the workflow steps."
+            ) from exc
+
+    @staticmethod
     def _extract_json_array(text: str) -> List[dict]:
         """Pull a JSON array out of raw model output, tolerating markdown fences."""
         stripped = re.sub(r"^```[a-zA-Z]*\n?", "", text.strip())
@@ -195,6 +208,14 @@ Rule-parser draft (for reference):
 
         return f"""You are a Python code generator. Given a list of workflow steps, produce a single runnable Python script.
 
+## NO FABRICATION (SOURCE OF TRUTH)
+
+Do **not** invent facts, dates, times, prices, statistics, schedules, quotes, or other specifics just to make the workflow "succeed." Ground every substantive claim in **tool outputs** (scrape, http_request, download, fetch_stock_price, files, etc.), **deterministic code** the steps require (e.g. `datetime` / `zoneinfo` math), or **verbatim** stable values from the step text (emails, tickers, URLs).
+
+If information is missing or retrieval fails: **stop, log clearly, or say in the user-facing message that it could not be obtained** — never fill gaps with plausible guesses. **`generate_text` must not be used to hallucinate missing real-world facts**; use it only to summarize, rephrase, or format **supplied** text, unless a step explicitly asks for creative or fictional content.
+
+**Schedules / "when is …":** Retrieve page or feed text first (`scrape_webpage`, `http_request`, `download`), then summarize or email. If the step names an organization but gives no URL, one reasonable attempt at its **official public** site is OK; on failure, do not invent dates. **Best:** put a **direct link** to the program or festival page in the step text when you have one — homepages often omit schedule detail.
+
 Available tools:
 {tools_info}
 
@@ -205,6 +226,8 @@ Always begin with:
    from dotenv import load_dotenv
    from workflowmvp.tools import ToolRegistry
    logging.basicConfig(level=logging.INFO, format='%(message)s')
+   for _lib in ('httpx', 'httpcore', 'urllib3', 'google_genai'):
+       logging.getLogger(_lib).setLevel(logging.WARNING)
    logger = logging.getLogger(__name__)
    load_dotenv()
 
@@ -213,6 +236,8 @@ Always end with a main() function and:
        main()
 
 Always use RELATIVE file paths ("report.txt", "data/output.csv"). Never hardcode absolute paths or /tmp.
+
+**Imports:** Use the Python **standard library** (`datetime`, **`zoneinfo`**) plus packages **already in** project requirements (e.g. `yfinance` when needed). **Do not import `pytz` or `holidays`** — they are not dependencies. For IANA timezones use `zoneinfo.ZoneInfo`. For a **nominal** NYSE/Nasdaq regular cash session close, **16:00 America/New_York on weekdays (Mon–Fri)** is acceptable unless steps say otherwise; **market holidays and early closes are not modeled** unless you use an external API or explicit rules in the step text.
 
 ## TOOL USAGE
 
@@ -235,16 +260,21 @@ When a tool returns JSON as text (e.g. download), parse from result:
 ## SPECIFIC TOOL GUIDANCE
 
 EMAIL — send_email: recipient, subject, body (plain text), plus optional attachments (list of relative file paths or one string path). Files are sent as real MIME attachments. You may use a short body like "See attached." when attaching. Without attachments, body carries the full message. Never invent email_from — omit it or use os.getenv('EMAIL_FROM').
+   **Recipient:** use the address **exactly** as written in the send-email step (same spelling and digits, e.g. `kevinmeltzer1@gmail.com` vs `kevinnmeltzer@gmail.com`). Do not substitute a different address.
    email_tool = tools.get_tool('send_email')
    email_tool.function(recipient='you@example.com', subject='...', body='...', attachments=['report.md'])
 
-AI TEXT GENERATION — for any writing, summarising, translating, or creative task:
+AI TEXT GENERATION — for summarising, translating, or **creative** tasks when the step allows it:
    gen = tools.get_tool('generate_text')
    r = gen.function(prompt="Write a short poem about SPY closing at $582.10")
    text = r.get('result', '') if r.get('success') else ''
+   For **reminders, paragraphs, and email bodies**, pass a large enough **max_tokens** (typically **512–1024**, not ~200) so the model is not cut off mid-sentence.
 
 SCRAPING — scrape_webpage strips HTML tags and returns clean readable text (up to 4000 chars).
-   Always use the exact URL from the step description. Never guess or construct subpage paths.
+   **URL priority:** (1) exact URL from the step / parameters; (2) else discover candidates, then scrape the best.
+
+   **discover_urls** — When the step names an org/site but **not** a specific program page, call `discover_urls` with `start_url` = the official homepage (must include `https://`), and `keywords` = distinctive words from the step (e.g. `sci-fi fantasy short festival seattle`). It merges **sitemap.xml** (and index → child sitemaps, bounded) with **same-origin links** from the homepage, ranks by keyword hits, returns JSON in `result`. Pick the **top-scoring** URL (or scrape the top 1–2 if the first is thin), then `scrape_webpage` that URL. Do **not** manually guess paths like `/festivals` unless `discover_urls` fails and the step gives no better option.
+
    Slice before passing to generate_text:
    content = (r.get('result') or '')[:3000]
 
@@ -252,17 +282,15 @@ SCRAPING — scrape_webpage strips HTML tags and returns clean readable text (up
 
 NEWS HEADLINES (no page URL in the workflow) — use download or http_request on a public RSS/Atom or JSON **feed URL** from the step (or a stable feed the user names). Pass the response body to generate_text to summarize. Do not scrape Google News HTML.
 
-   CRITICAL: when building a generate_text prompt from scraped content, explicitly tell the model
-   to use ONLY information found in the content and to state when details are missing — never
-   allow placeholder text like [Insert date] / [Insert location] in the output:
+   Example `generate_text` prompt when you already have page/feed **content** (adjust the task string as needed):
    gen.function(prompt=(
-       f"Using ONLY the information in this webpage content, write a reminder message.\\n"
-       f"If specific details (dates, times, location) are not present, say so clearly.\\n"
-       f"Do NOT use placeholder text like [Insert date] — if the info is missing, say 'not found'.\\n\\n"
+       f"Using ONLY the information below, write a reminder message.\\n"
+       f"If dates, times, or location are not present, say so — do not invent them.\\n\\n"
        f"Content:\\n{{content}}"
    ))
 
 STOCK / FINANCIAL DATA — prefer fetch_stock_price over scraping finance websites.
+- **Ticker:** use the **exact** symbol from the step description or parameters (e.g. `SPY` vs `BTC-USD`). Never swap in a different instrument.
 - **Single latest close:** fetch_stock_price(ticker='SPY', period='1d'). On success read price, ticker, and currency from the returned dict. Common tickers: ^GSPC, ^DJI, ^IXIC, BTC-USD.
 - **Multi-bar math** (e.g. compare first vs last close in the same history window): import yfinance as yf inside the script and use Ticker(...).history(period=...). Use yfinance only for this price series, not for scraping webpages. fetch_stock_price exposes the latest bar from its window, not the full DataFrame for custom comparisons.
    import yfinance as yf
@@ -291,7 +319,7 @@ APPEND / LOG LINES — append_file adds text without reading the whole file firs
 
 FILE INTEGRITY — hash_file(file_path='backup.zip', algorithm='sha256') returns hex_digest.
 
-DATE & TIME — get_current_time(timezone='America/Los_Angeles') returns iso, unix, timezone (IANA names). Use for timestamps in reports and emails.
+DATE & TIME — get_current_time(timezone='…') returns iso, unix, timezone (any **IANA** name). Use for clocks in workflows and emails; combine with `zoneinfo` in code when you need arithmetic without an extra dependency.
 
 ## RECORDINGS VS. INTENT (UI-HEAVY STEPS)
 
@@ -299,13 +327,14 @@ If steps read like a **screen recording** (Navigate, Type in search bar, Gmail c
 long google.com URLs with tracking params, many consecutive `custom` steps before `send_email`):
 - Treat them as **demonstration of intent**, not a script to replay with logger.info per click.
 - Implement the **underlying goal**: compute or fetch fresh facts at runtime (datetime, zoneinfo, http_request to a time/market API, etc.), then call tools (e.g. send_email) with **computed** subject/body.
-- **Never** hardcode time-sensitive phrases copied from the narration (e.g. "closes in 22 mins", search-result snippets) as string literals in email body — recompute.
+- **Never** hardcode time-sensitive phrases copied from the narration (e.g. "closes in 22 mins") in email bodies — recompute or fetch; see ## NO FABRICATION.
+- Users **edit parsed steps in the app** before codegen; treat each step's **final description, action, and parameters** as the source of truth (not an earlier draft or guessed frame read).
 
 Constants vs. dynamic: use descriptions **exactly** for stable user data (emails, file paths, API URLs, tickers). Recompute anything that depends on "now" or on-page search results.
 
 ## LOGGING
 
-Log major milestones only — not every sub-step:
+Log **major milestones** only — not every sub-step. Prefer **short, single-line** `logger.info` messages so streamed run logs stay readable (avoid dumping multi-line LLM output into the log).
    logger.info("Fetching SPY price...")
    logger.info(f"✅ SPY: ${{price:.2f}}")
    logger.info("Sending email...")
@@ -314,7 +343,12 @@ Log major milestones only — not every sub-step:
 ## OUTPUT
 
 Generate ONLY the Python script — no markdown, no explanation, no comments beyond what is needed.
-Extract exact values from step descriptions for **stable** fields only; compute time-sensitive and lookup-dependent content at runtime — never use placeholders for data you can compute."""
+Extract exact values from step descriptions for **stable** fields only; compute time-sensitive values at runtime where the steps require it.
+
+**Completeness:** Emit the **entire** script in one piece through `if __name__ == "__main__": main()` (or equivalent). Do not stop mid-statement.
+Every compound statement (`if`, `while`, `for`, `def`, `with`, `try`, `class`) MUST have a **non-empty** indented body on the following line(s). Example weekend skip:
+   while next_close_et.weekday() >= 5:
+       next_close_et += datetime.timedelta(days=1)"""
 
     def _create_user_prompt(self, steps: List[WorkflowStep]) -> str:
         steps_text = "".join(
@@ -328,5 +362,8 @@ Extract exact values from step descriptions for **stable** fields only; compute 
         return (
             f"Generate a Python script for this workflow:\n{steps_text}\n"
             "Follow SCRIPT STRUCTURE, TOOL USAGE, and SPECIFIC TOOL GUIDANCE above. "
-            "For UI-heavy or transcript-like steps, apply ## RECORDINGS VS. INTENT."
+            "Apply ## NO FABRICATION.\n"
+            "For UI-heavy or transcript-like steps, apply ## RECORDINGS VS. INTENT.\n"
+            "Honor **Depends on**: pass real outputs from earlier steps into later tools "
+            "(e.g. fetched text into generate_text)."
         )

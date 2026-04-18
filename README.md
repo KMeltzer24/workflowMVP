@@ -29,8 +29,11 @@ On macOS, `/usr/bin/python3` is often 3.9; use Homebrew `python3.11` (or similar
 ## Highlights
 
 - Text descriptions or screen-recording videos → executable Python.
-- 29 built-in tools including `http_request`, `generate_text`, `read_json` / `write_json`, `append_file`, `hash_file`, `get_current_time`, `read_pdf`, `render_template`, and `fetch_stock_price`.
+- 30 built-in tools including `http_request`, `scrape_webpage`, **`discover_urls`** (sitemap + same-origin links, keyword-ranked), `generate_text`, `read_json` / `write_json`, `append_file`, `hash_file`, `get_current_time`, `read_pdf`, `render_template`, and `fetch_stock_price`.
 - Browser UI with tabs, live streaming output, save/load workflows, and inline credential prompts.
+- **Create** flow: edit parsed steps before *Generate Python code*; saving a step re-parses that line so action/parameters stay aligned.
+- Code generation checks **Python syntax** before writing a script, and the system prompt stresses **no fabricated facts** (fetch real pages/feeds/prices first; `generate_text` summarizes supplied content).
+- Workflow subprocesses default to **`WORKFLOW_QUIET_LOGGERS=1`** so streamed run logs hide noisy `httpx` / Gemini SDK INFO lines (set to `0` to debug).
 - Credentials stay in your browser's `sessionStorage` or `.env` — never written to disk server-side.
 - Hybrid parsing: rule-based first, AI assist only when confidence is low.
 - Tool safety profile: sandboxed file paths and blocked dangerous shell commands by default.
@@ -80,12 +83,14 @@ Open <http://localhost:5050>.
 
 ## Using the web UI
 
-1. **Create** tab — write a numbered workflow or upload a screen-capture video, then click *Parse*. Edit any step inline before generating.
-2. **Generate Python code** — sends the parsed steps to the configured LLM and writes a script to `data/generated_workflows/`.
+1. **Create** tab — write a numbered workflow or upload a screen-capture video, then click *Parse workflow*. Use *Edit* on any step to fix wording, URLs, emails, or tickers; *Save* re-runs the rule parser on that step.
+2. **Generate Python code** — sends the current steps to the configured LLM, validates the returned script, and writes it under `data/generated_workflows/`. Each run is independent (no memory of prior generated files).
 3. **Run** tab — executes the script in a sandboxed `data/temp_outputs/<run_id>/` directory. Output streams live. Artifacts persist until server shutdown or `/api/cleanup`.
 4. **Examples** tab — seven ready-to-run workflows, including SMTP and notification demos.
 5. **Tools** tab — browse every tool available to generated code.
 6. **Settings** — enter Gemini/SMTP credentials for the browser session. Provider keys (Groq/OpenRouter) are set via `.env`.
+
+For **event or schedule** steps on a public site, prefer a **direct program URL** in the step text when you have one. Otherwise generated code can use **`discover_urls`** (homepage + sitemap + on-page links) to pick a candidate page before **`scrape_webpage`** — it does not crawl arbitrary deep sites.
 
 ## Example workflow
 
@@ -118,7 +123,7 @@ workflowMVP/
 ├── workflowmvp/
 │   ├── parser.py            # rule-based text → structured steps
 │   ├── agent.py             # LLM-backed code generator (multi-provider)
-│   ├── tools.py             # ToolRegistry: 29 tools
+│   ├── tools.py             # ToolRegistry: 30 tools
 │   └── video_to_workflow.py # frame sampling + Gemini vision analysis
 ├── web/
 │   ├── templates/index.html
@@ -155,6 +160,8 @@ registry.register_tool(Tool(
 - **Email fails with "Missing SMTP credentials"** — open *Settings* and fill in `EMAIL_USER`, `EMAIL_PASSWORD`, and `EMAIL_FROM`. Works with any SMTP provider: Gmail (needs an [App Password](https://myaccount.google.com/apppasswords)), Outlook (`smtp-mail.outlook.com:587`), Yahoo (`smtp.mail.yahoo.com:587`), or any custom SMTP server — set `SMTP_SERVER` and `SMTP_PORT` in `.env` accordingly.
 - **Video parse returns no steps** — re-record with slower, clearer interactions or increase `max_frames` in `workflowmvp/video_to_workflow.py`.
 - **"Workflow file not found"** — the file was likely removed by a previous cleanup. Regenerate the workflow and run again.
+- **Codegen error: invalid Python / syntax** — the model returned truncated or malformed code; click *Generate Python code* again or simplify steps.
+- **Run log shows `HTTP Request:` or `AFC is enabled`** — subprocesses set `WORKFLOW_QUIET_LOGGERS=1` by default to hide those lines. Export `WORKFLOW_QUIET_LOGGERS=0` before starting the server if you need full SDK noise.
 
 ## License
 

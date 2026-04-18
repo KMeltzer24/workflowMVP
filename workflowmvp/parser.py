@@ -50,6 +50,7 @@ class WorkflowParser:
         "http_request": ["url"],
         "read_pdf": ["file_path"],
         "render_template": ["template"],
+        "discover_urls": ["start_url"],
     }
 
     def parse_workflow(self, workflow_text: str) -> List[WorkflowStep]:

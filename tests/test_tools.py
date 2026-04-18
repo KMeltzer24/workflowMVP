@@ -397,3 +397,34 @@ def test_read_pdf_invalid_pages_returns_error(registry: ToolRegistry, tmp_path: 
     result = registry.get_tool("read_pdf").function(file_path=str(pdf), pages="5-7")
     assert result["success"] is False
     assert "no valid pages" in result["error"].lower()
+
+
+def test_discover_urls_page_links_and_keywords(registry: ToolRegistry) -> None:
+    html = """<html><body>
+    <a href="/about">About</a>
+    <a href="/festivals/sci-fi-short">Sci-Fi Short Festival</a>
+    </body></html>"""
+    mock_resp = MagicMock()
+    mock_resp.text = html
+
+    with patch.object(ToolRegistry, "_request_with_retry", return_value=mock_resp):
+        out = registry.get_tool("discover_urls").function(
+            start_url="https://example.org/",
+            keywords="sci-fi festival",
+            use_sitemap=False,
+            max_results=10,
+        )
+    assert out["success"] is True
+    urls = [e["url"] for e in out["urls"]]
+    assert any("sci-fi" in u for u in urls)
+    scores = [e["score"] for e in out["urls"]]
+    assert scores == sorted(scores, reverse=True)
+
+
+def test_discover_urls_requires_scheme_and_host(registry: ToolRegistry) -> None:
+    out = registry.get_tool("discover_urls").function(
+        start_url="example.org",
+        use_sitemap=False,
+        use_page_links=False,
+    )
+    assert out["success"] is False
