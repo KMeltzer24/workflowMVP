@@ -62,7 +62,6 @@ load_dotenv()
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 GENERATED_DIR = os.path.join(PROJECT_ROOT, "data", "generated_workflows")
 TEMP_OUTPUTS_DIR = os.path.join(PROJECT_ROOT, "data", "temp_outputs")
-VIDEO_CACHE_DIR = os.path.join(PROJECT_ROOT, "data", "video_cache")
 
 
 def cleanup_files(verbose: bool = True) -> int:
@@ -94,16 +93,6 @@ def cleanup_files(verbose: bool = True) -> int:
             except OSError as exc:
                 if verbose:
                     print(f"  could not delete {path}: {exc}")
-
-    if os.path.isdir(VIDEO_CACHE_DIR):
-        try:
-            shutil.rmtree(VIDEO_CACHE_DIR)
-            count += 1
-            if verbose:
-                print(f"  deleted: {VIDEO_CACHE_DIR}")
-        except OSError as exc:
-            if verbose:
-                print(f"  could not delete {VIDEO_CACHE_DIR}: {exc}")
 
     if verbose:
         print(f"Cleanup complete. Removed {count} items.")
@@ -922,17 +911,6 @@ def _sse_error(message: str) -> Response:
 # ---------------------------------------------------------------------------
 
 
-def _airplay_hint(port: int) -> str:
-    """Hint shown when port 5000 is in use on macOS."""
-    if sys.platform == "darwin" and port == 5000:
-        return (
-            " On macOS, AirPlay Receiver claims port 5000 by default. Either"
-            " disable it in System Settings > General > AirDrop & Handoff,"
-            " or rerun with `--port 5050` (or any free port)."
-        )
-    return ""
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="WorkflowMVP - Web Interface")
     parser.add_argument(
@@ -972,8 +950,7 @@ def main() -> None:
             app.run(debug=False, host=args.host, port=args.port)
     except OSError as exc:
         # Most commonly: port in use.
-        message = f"Could not bind to {args.host}:{args.port}: {exc}."
-        print(message + _airplay_hint(args.port))
+        print(f"Could not bind to {args.host}:{args.port}: {exc}.")
         sys.exit(1)
 
 

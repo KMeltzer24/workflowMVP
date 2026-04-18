@@ -28,7 +28,7 @@ help:
 	@echo "  make test      - run the test suite"
 	@echo "  make lint      - run ruff lint"
 	@echo "  make format    - run ruff format"
-	@echo "  make clean     - remove generated workflows, temp outputs, caches"
+	@echo "  make clean     - remove generated workflows, temp outputs, pytest/ruff caches"
 	@echo ""
 	@echo "Simple provider shorthand:"
 	@echo "  make run                 # Gemini (default)"

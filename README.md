@@ -107,7 +107,7 @@ Routes are implemented in `main.py`; the web UI calls them from `web/static/js/a
 pip install -r requirements-dev.txt
 pytest          # run all tests (use `python -m pytest` if `pytest` is not on PATH)
 ruff check .    # lint (`python -m ruff check .` if needed)
-make clean      # wipe generated scripts, temp outputs, and caches
+make clean      # wipe generated scripts, temp outputs, and pytest/ruff caches
 ```
 
 ### Project layout
