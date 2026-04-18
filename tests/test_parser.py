@@ -79,6 +79,13 @@ def test_parses_get_current_time(parser: WorkflowParser) -> None:
     assert steps[0].parameters.get("timezone") == "America/New_York"
 
 
+def test_parses_read_pdf(parser: WorkflowParser) -> None:
+    steps = parser.parse_workflow('1. Read the PDF file "report.pdf"')
+    assert len(steps) == 1
+    assert steps[0].action == "read_pdf"
+    assert steps[0].parameters.get("file_path") == "report.pdf"
+
+
 def test_parses_step_number_and_description_on_next_line(
     parser: WorkflowParser,
 ) -> None:

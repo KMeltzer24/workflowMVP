@@ -30,6 +30,9 @@ def test_tools_endpoint(client) -> None:
         "append_file",
         "hash_file",
         "get_current_time",
+        "read_pdf",
+        "render_template",
+        "fetch_stock_price",
     }.issubset(names)
 
 

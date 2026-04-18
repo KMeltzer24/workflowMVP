@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import zipfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
@@ -277,6 +277,44 @@ def test_render_template_sandboxed_blocks_attr_access(registry: ToolRegistry) ->
         variables={"cls": str},
     )
     assert result["success"] is False
+
+
+# ---------------------------------------------------------------------------
+# fetch_stock_price (yfinance mocked — no live Yahoo dependency in CI)
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_stock_price_uses_last_close_from_history(
+    registry: ToolRegistry,
+) -> None:
+    import pandas as pd
+
+    hist = pd.DataFrame({"Close": [10.0, 10.5, 11.25]})
+    mock_ticker = MagicMock()
+    mock_ticker.history.return_value = hist
+    mock_ticker.fast_info = MagicMock(currency="USD", long_name="Mock Inc")
+
+    with patch("yfinance.Ticker", return_value=mock_ticker):
+        out = registry.get_tool("fetch_stock_price").function(ticker="MOCK", period="5d")
+
+    assert out["success"] is True
+    assert out["ticker"] == "MOCK"
+    assert out["price"] == 11.25
+    assert out["currency"] == "USD"
+    mock_ticker.history.assert_called_once_with(period="5d")
+
+
+def test_fetch_stock_price_empty_history(registry: ToolRegistry) -> None:
+    import pandas as pd
+
+    mock_ticker = MagicMock()
+    mock_ticker.history.return_value = pd.DataFrame()
+
+    with patch("yfinance.Ticker", return_value=mock_ticker):
+        out = registry.get_tool("fetch_stock_price").function(ticker="VOID")
+
+    assert out["success"] is False
+    assert "no data" in out["error"].lower()
 
 
 # ---------------------------------------------------------------------------
