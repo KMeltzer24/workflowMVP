@@ -48,6 +48,8 @@ class WorkflowParser:
         "fetch_stock_price": ["ticker"],
         "generate_text": ["prompt"],
         "http_request": ["url"],
+        "read_pdf": ["file_path"],
+        "render_template": ["template"],
     }
 
     def parse_workflow(self, workflow_text: str) -> List[WorkflowStep]:
@@ -232,6 +234,9 @@ class WorkflowParser:
             return 'write_file', self._extract_file_params(description)
 
         # ── File read ─────────────────────────────────────────────────────────
+        if ('read' in words or 'extract' in words) and ('pdf' in words or '.pdf' in d):
+            return 'read_pdf', self._extract_file_params(description)
+
         if 'read' in words and (
             'file' in words or 'csv' in words or 'json' in words or '.json' in d
         ):

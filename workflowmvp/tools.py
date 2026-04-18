@@ -528,6 +528,37 @@ class ToolRegistry:
             },
         ))
 
+        self.register_tool(Tool(
+            name="read_pdf",
+            description=(
+                "Extract plain text from a PDF file using pypdf. "
+                "Returns the concatenated text of all pages (or a selected page range)."
+            ),
+            function=self._read_pdf,
+            parameters={
+                "file_path": "Path to the .pdf file",
+                "pages": (
+                    "Optional list of 1-indexed page numbers, or a string "
+                    "like '1-3' / '2,4,6'. Reads all pages when omitted."
+                ),
+            },
+        ))
+
+        self.register_tool(Tool(
+            name="render_template",
+            description=(
+                "Render a Jinja2 template string with a variables dict. "
+                "Safe autoescape is ON for HTML-like templates. "
+                "Use for email bodies, reports, and any structured text output."
+            ),
+            function=self._render_template,
+            parameters={
+                "template": "Jinja2 template string (e.g. 'Hello {{ name }}!')",
+                "variables": "Dict of values to substitute (e.g. {'name': 'World'})",
+                "autoescape": "Set False to disable HTML autoescape (default: True)",
+            },
+        ))
+
     # Tool implementations
     def _download(self, url: str, output_file: str = None) -> Dict[str, Any]:
         """Download content from URL"""
@@ -664,6 +695,114 @@ class ToolRegistry:
                 "timezone": tz_label,
                 "unix": int(now.timestamp()),
                 "result": iso,
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    @staticmethod
+    def _parse_page_spec(pages: Any, total_pages: int) -> List[int]:
+        """Parse pages arg into 0-indexed page numbers, clamped to available range."""
+        if pages is None:
+            return list(range(total_pages))
+        if isinstance(pages, int):
+            spec_items: List[Any] = [pages]
+        elif isinstance(pages, (list, tuple)):
+            spec_items = list(pages)
+        elif isinstance(pages, str):
+            spec_items = [p.strip() for p in pages.split(",") if p.strip()]
+        else:
+            raise ValueError(f"Unsupported pages spec: {pages!r}")
+
+        collected: List[int] = []
+        for item in spec_items:
+            if isinstance(item, int):
+                collected.append(item - 1)
+                continue
+            text = str(item).strip()
+            if "-" in text:
+                start_str, end_str = text.split("-", 1)
+                start = int(start_str) - 1
+                end = int(end_str) - 1
+                if start > end:
+                    start, end = end, start
+                collected.extend(range(start, end + 1))
+            else:
+                collected.append(int(text) - 1)
+
+        # Deduplicate while preserving order, clamp to [0, total_pages).
+        seen: set[int] = set()
+        ordered: List[int] = []
+        for idx in collected:
+            if 0 <= idx < total_pages and idx not in seen:
+                seen.add(idx)
+                ordered.append(idx)
+        return ordered
+
+    def _read_pdf(self, file_path: str, pages: Any = None) -> Dict[str, Any]:
+        """Extract text from a PDF via pypdf."""
+        try:
+            from pypdf import PdfReader
+        except ImportError:
+            return {
+                "success": False,
+                "error": "pypdf is not installed. Run: pip install pypdf",
+            }
+        try:
+            safe_path = self._sandbox_path(file_path)
+            reader = PdfReader(safe_path)
+            total_pages = len(reader.pages)
+            page_indices = self._parse_page_spec(pages, total_pages)
+            if not page_indices:
+                return {
+                    "success": False,
+                    "error": (
+                        f"No valid pages selected (PDF has {total_pages} pages, "
+                        f"requested spec: {pages!r})"
+                    ),
+                }
+            parts: List[str] = []
+            for idx in page_indices:
+                try:
+                    parts.append(reader.pages[idx].extract_text() or "")
+                except Exception as page_err:  # noqa: BLE001 - per-page best effort
+                    parts.append(f"[page {idx + 1} extraction failed: {page_err}]")
+            text = "\n".join(parts).strip()
+            return {
+                "success": True,
+                "text": text,
+                "pages_read": len(page_indices),
+                "total_pages": total_pages,
+                "result": text,
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def _render_template(
+        self,
+        template: str,
+        variables: Optional[Dict[str, Any]] = None,
+        autoescape: bool = True,
+    ) -> Dict[str, Any]:
+        """Render a Jinja2 template string with sandboxed execution."""
+        try:
+            from jinja2 import StrictUndefined
+            from jinja2.sandbox import SandboxedEnvironment
+        except ImportError:
+            return {
+                "success": False,
+                "error": "Jinja2 is not installed. Run: pip install jinja2",
+            }
+        try:
+            env = SandboxedEnvironment(
+                autoescape=bool(autoescape),
+                undefined=StrictUndefined,
+            )
+            tmpl = env.from_string(template or "")
+            rendered = tmpl.render(**(variables or {}))
+            return {
+                "success": True,
+                "rendered": rendered,
+                "result": rendered,
             }
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -1023,74 +1162,23 @@ class ToolRegistry:
             return {"success": False, "error": str(e)}
 
     def _generate_text(self, prompt: str, max_tokens: int = 1000) -> Dict[str, Any]:
-        """Call the configured LLM to generate text."""
+        """Call the configured LLM to generate text via the shared LLMClient."""
         try:
-            provider = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
-            api_key = None
-            if provider == "gemini":
-                api_key = os.getenv("GEMINI_API_KEY")
-            elif provider == "groq":
-                api_key = os.getenv("GROQ_API_KEY")
-            else:
-                provider = "openrouter"
-                api_key = os.getenv("OPENROUTER_API_KEY")
+            from .llm import LLMClient
 
-            if not api_key:
+            client = LLMClient()
+            if not client.is_configured():
+                from .llm import required_api_key_name
+
                 return {
                     "success": False,
                     "error": (
-                        f"No API key found for provider '{provider}'. "
-                        "Set GEMINI_API_KEY / GROQ_API_KEY / OPENROUTER_API_KEY in .env."
+                        f"No API key found for provider '{client.provider}'. "
+                        f"Set {required_api_key_name(client.provider)} in .env."
                     ),
                 }
-
-            if provider == "gemini":
-                from google import genai as google_genai
-                from google.genai import types as genai_types
-
-                model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-                client = google_genai.Client(api_key=api_key)
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                    config=genai_types.GenerateContentConfig(
-                        temperature=0.7,
-                        max_output_tokens=max_tokens,
-                    ),
-                )
-                text = response.text or ""
-            else:
-                if provider == "groq":
-                    url = "https://api.groq.com/openai/v1/chat/completions"
-                    model_name = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
-                    extra_headers: Dict[str, str] = {}
-                else:
-                    url = "https://openrouter.ai/api/v1/chat/completions"
-                    model_name = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.1-70b-instruct")
-                    extra_headers = {
-                        "HTTP-Referer": os.getenv("OPENROUTER_SITE_URL", "http://localhost:5050"),
-                        "X-Title": os.getenv("OPENROUTER_APP_NAME", "WorkflowMVP"),
-                    }
-                headers = {
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                    **extra_headers,
-                }
-                payload = {
-                    "model": model_name,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.7,
-                    "max_tokens": max_tokens,
-                }
-                resp = requests.post(url, headers=headers, json=payload, timeout=60)
-                resp.raise_for_status()
-                data = resp.json()
-                choices = data.get("choices") or []
-                if not choices:
-                    return {"success": False, "error": f"{provider} returned no choices."}
-                text = (choices[0].get("message") or {}).get("content", "") or ""
-
-            return {"success": True, "result": text.strip()}
+            text = client.generate_text(prompt, max_tokens=max_tokens, temperature=0.7)
+            return {"success": True, "result": (text or "").strip()}
         except Exception as exc:
             return {"success": False, "error": str(exc)}
 

@@ -4,20 +4,12 @@ Supports Gemini, Groq, and OpenRouter as LLM backends.
 """
 
 import json
-import os
 import re
 from typing import List, Optional
 
-import requests
-from google import genai
-from google.genai import types
-
+from .llm import LLMClient, required_api_key_name
 from .parser import WorkflowStep
 from .tools import ToolRegistry
-
-DEFAULT_GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-DEFAULT_GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
-DEFAULT_OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.1-70b-instruct")
 
 # Token budget for code generation. 4000 gives headroom for 6+ step workflows.
 _CODE_GEN_MAX_TOKENS = 4000
@@ -34,31 +26,11 @@ class WorkflowAgent:
         model: Optional[str] = None,
         provider: Optional[str] = None,
     ):
-        self.provider = (provider or os.getenv("LLM_PROVIDER", "gemini")).strip().lower()
-        if self.provider not in {"gemini", "groq", "openrouter"}:
-            raise ValueError(
-                f"Unsupported provider '{self.provider}'. Choose gemini, groq, or openrouter."
-            )
-
-        default_model = {
-            "gemini": DEFAULT_GEMINI_MODEL,
-            "groq": DEFAULT_GROQ_MODEL,
-            "openrouter": DEFAULT_OPENROUTER_MODEL,
-        }[self.provider]
-        self.model = model or default_model
+        self._llm = LLMClient(provider=provider, api_key=api_key, model=model)
+        self.provider = self._llm.provider
+        self.model = self._llm.model
+        self.api_key = self._llm.api_key
         self.tool_registry = ToolRegistry()
-
-        self.api_key = (
-            api_key
-            or os.getenv("GEMINI_API_KEY" if self.provider == "gemini"
-                         else "GROQ_API_KEY" if self.provider == "groq"
-                         else "OPENROUTER_API_KEY")
-        )
-
-        if self.api_key and self.provider == "gemini":
-            self._gemini_client = genai.Client(api_key=self.api_key)
-        else:
-            self._gemini_client = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -150,62 +122,17 @@ Rule-parser draft (for reference):
 
     @classmethod
     def required_api_key_name(cls, provider: str) -> str:
-        return {"gemini": "GEMINI_API_KEY", "groq": "GROQ_API_KEY", "openrouter": "OPENROUTER_API_KEY"}.get(
-            provider, "GEMINI_API_KEY"
-        )
+        return required_api_key_name(provider)
 
     # ------------------------------------------------------------------
-    # LLM call
+    # LLM call (delegates to LLMClient — agent-specific temp defaults only)
     # ------------------------------------------------------------------
 
     def _generate_text(self, prompt: str, max_tokens: int = _CODE_GEN_MAX_TOKENS) -> str:
         """Send a prompt to the configured LLM and return the text response."""
-        if self.provider == "gemini":
-            if not self._gemini_client:
-                raise ValueError("Gemini client not initialised — check GEMINI_API_KEY.")
-            response = self._gemini_client.models.generate_content(
-                model=self.model,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.1,
-                    max_output_tokens=max_tokens,
-                ),
-            )
-            return response.text or ""
-
-        # Groq / OpenRouter share the OpenAI-compatible chat completions API.
-        if self.provider == "groq":
-            url = "https://api.groq.com/openai/v1/chat/completions"
-            extra_headers: dict = {}
-        else:
-            url = "https://openrouter.ai/api/v1/chat/completions"
-            extra_headers = {
-                "HTTP-Referer": os.getenv("OPENROUTER_SITE_URL", "http://localhost:5050"),
-                "X-Title": os.getenv("OPENROUTER_APP_NAME", "WorkflowMVP"),
-            }
-
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-            **extra_headers,
-        }
-        payload = {
-            "model": self.model,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.1,
-            "max_tokens": max_tokens,
-        }
-        response = requests.post(url, headers=headers, json=payload, timeout=60)
-        response.raise_for_status()
-        data = response.json()
-        choices = data.get("choices") or []
-        if not choices:
-            raise ValueError(f"{self.provider} returned no choices.")
-        message = choices[0].get("message") or {}
-        content = message.get("content", "")
-        if isinstance(content, list):
-            return "\n".join(chunk.get("text", "") for chunk in content if isinstance(chunk, dict)).strip()
-        return str(content)
+        # Code generation and parse-assist both want near-deterministic output,
+        # hence temperature=0.1. The generate_text tool uses a higher default.
+        return self._llm.generate_text(prompt, max_tokens=max_tokens, temperature=0.1)
 
     # ------------------------------------------------------------------
     # Output extraction helpers

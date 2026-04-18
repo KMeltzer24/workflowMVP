@@ -233,3 +233,129 @@ def test_sandbox_blocks_paths_outside_run_dir(
     )
     assert result["success"] is False
     assert "outside sandbox" in result["error"].lower()
+
+
+# ---------------------------------------------------------------------------
+# render_template
+# ---------------------------------------------------------------------------
+
+
+def test_render_template_basic(registry: ToolRegistry) -> None:
+    result = registry.get_tool("render_template").function(
+        template="Hello {{ name }}! You have {{ count }} items.",
+        variables={"name": "Kevin", "count": 3},
+        autoescape=False,
+    )
+    assert result["success"] is True
+    assert result["rendered"] == "Hello Kevin! You have 3 items."
+
+
+def test_render_template_autoescape_html(registry: ToolRegistry) -> None:
+    result = registry.get_tool("render_template").function(
+        template="<p>{{ body }}</p>",
+        variables={"body": "<script>alert(1)</script>"},
+        autoescape=True,
+    )
+    assert result["success"] is True
+    assert "<script>" not in result["rendered"]
+    assert "&lt;script&gt;" in result["rendered"]
+
+
+def test_render_template_missing_variable_fails(registry: ToolRegistry) -> None:
+    result = registry.get_tool("render_template").function(
+        template="Hello {{ missing }}!",
+        variables={},
+    )
+    assert result["success"] is False
+    assert "missing" in result["error"].lower() or "undefined" in result["error"].lower()
+
+
+def test_render_template_sandboxed_blocks_attr_access(registry: ToolRegistry) -> None:
+    # Jinja2 SandboxedEnvironment blocks access to dunder attributes.
+    result = registry.get_tool("render_template").function(
+        template="{{ cls.__mro__ }}",
+        variables={"cls": str},
+    )
+    assert result["success"] is False
+
+
+# ---------------------------------------------------------------------------
+# read_pdf
+# ---------------------------------------------------------------------------
+
+
+def _write_minimal_pdf(path: Path, pages_text: list[str]) -> None:
+    """Build a real (if tiny) PDF with pypdf so extract_text() has real input."""
+    from pypdf import PdfWriter
+    from pypdf.generic import (
+        ArrayObject,
+        ContentStream,
+        DecodedStreamObject,
+        DictionaryObject,
+        FloatObject,
+        NameObject,
+        NumberObject,
+        TextStringObject,
+    )
+
+    writer = PdfWriter()
+    for text in pages_text:
+        writer.add_blank_page(width=612, height=792)
+        page = writer.pages[-1]
+        # Build a content stream that draws the text at (72, 720) in Helvetica 12.
+        stream = DecodedStreamObject()
+        # PDF text-showing operators: BT / Tf / Td / Tj / ET
+        stream.set_data(
+            f"BT /F1 12 Tf 72 720 Td ({text}) Tj ET".encode("latin-1")
+        )
+        page[NameObject("/Contents")] = stream
+        # Register a font resource on the page so /F1 resolves.
+        font = DictionaryObject()
+        font[NameObject("/Type")] = NameObject("/Font")
+        font[NameObject("/Subtype")] = NameObject("/Type1")
+        font[NameObject("/BaseFont")] = NameObject("/Helvetica")
+        fonts = DictionaryObject()
+        fonts[NameObject("/F1")] = font
+        resources = DictionaryObject()
+        resources[NameObject("/Font")] = fonts
+        page[NameObject("/Resources")] = resources
+        # MediaBox is set by add_blank_page, but ensure ContentStream type flows.
+        _ = ContentStream, ArrayObject, FloatObject, NumberObject, TextStringObject
+    with open(path, "wb") as f:
+        writer.write(f)
+
+
+def test_read_pdf_all_pages(registry: ToolRegistry, tmp_path: Path) -> None:
+    pdf = tmp_path / "doc.pdf"
+    _write_minimal_pdf(pdf, ["Hello PDF World", "Second Page Text"])
+    result = registry.get_tool("read_pdf").function(file_path=str(pdf))
+    assert result["success"] is True
+    assert result["total_pages"] == 2
+    assert result["pages_read"] == 2
+    # pypdf may introduce whitespace; just assert substrings.
+    assert "Hello PDF World" in result["text"]
+    assert "Second Page Text" in result["text"]
+
+
+def test_read_pdf_page_range(registry: ToolRegistry, tmp_path: Path) -> None:
+    pdf = tmp_path / "doc.pdf"
+    _write_minimal_pdf(pdf, ["Alpha", "Beta", "Gamma"])
+    result = registry.get_tool("read_pdf").function(file_path=str(pdf), pages="1-2")
+    assert result["success"] is True
+    assert result["pages_read"] == 2
+    assert "Alpha" in result["text"]
+    assert "Beta" in result["text"]
+    assert "Gamma" not in result["text"]
+
+
+def test_read_pdf_missing_file(registry: ToolRegistry, tmp_path: Path) -> None:
+    result = registry.get_tool("read_pdf").function(file_path=str(tmp_path / "nope.pdf"))
+    assert result["success"] is False
+
+
+def test_read_pdf_invalid_pages_returns_error(registry: ToolRegistry, tmp_path: Path) -> None:
+    pdf = tmp_path / "doc.pdf"
+    _write_minimal_pdf(pdf, ["Only page"])
+    result = registry.get_tool("read_pdf").function(file_path=str(pdf), pages="5-7")
+    assert result["success"] is False
+    assert "no valid pages" in result["error"].lower()

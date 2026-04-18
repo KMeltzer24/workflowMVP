@@ -13,6 +13,8 @@ Handles:
 from __future__ import annotations
 
 import argparse
+import ast
+import hashlib
 import json
 import logging
 import os
@@ -26,7 +28,7 @@ import time
 import uuid
 import warnings
 from collections.abc import Iterable
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 # Suppress noisy gRPC / ALTS warnings emitted by some Google client stacks on import.
 os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
@@ -99,12 +101,34 @@ def cleanup_files(verbose: bool = True) -> int:
 
 # Mapping of workflow actions -> env var keys they require. Used by
 # /api/check-requirements to tell the UI which creds are missing before a run.
-ACTION_REQUIREMENTS: Dict[str, List[str]] = {
+#
+# Values can be either:
+#   - a static list of env var names, or
+#   - a callable `(effective_env: Mapping[str, str]) -> List[str]` for
+#     provider-aware resolution (e.g. generate_text picks its key based on
+#     LLM_PROVIDER).
+ActionRequirement = List[str] | Callable[[Dict[str, str]], List[str]]
+
+
+def _generate_text_requirements(effective: Dict[str, str]) -> List[str]:
+    """Which key `generate_text` needs depends on the configured LLM_PROVIDER."""
+    provider = (effective.get("LLM_PROVIDER") or "gemini").strip().lower()
+    if provider == "groq":
+        return ["GROQ_API_KEY"]
+    if provider == "openrouter":
+        return ["OPENROUTER_API_KEY"]
+    return ["GEMINI_API_KEY"]
+
+
+ACTION_REQUIREMENTS: Dict[str, ActionRequirement] = {
     "send_email": [
         "EMAIL_USER",
         "EMAIL_PASSWORD",
         "EMAIL_FROM",
     ],
+    "generate_text": _generate_text_requirements,
+    "generate_haiku": _generate_text_requirements,
+    "generate_poem": _generate_text_requirements,
 }
 
 # Allow-list of credential keys the web layer will inject into subprocess env.
@@ -244,15 +268,26 @@ def _workflow_popen_kwargs() -> Dict[str, Any]:
     return {"preexec_fn": _apply_workflow_rlimits}
 
 
+def _resolve_requirement(
+    requirement: ActionRequirement, effective: Dict[str, str]
+) -> List[str]:
+    if callable(requirement):
+        return list(requirement(effective))
+    return list(requirement)
+
+
 def _missing_requirements(
     steps: Iterable[Dict[str, Any]], creds: Dict[str, str]
 ) -> List[str]:
     """Return env var keys that a run will need but which are not yet provided."""
-    effective = {**os.environ, **creds}
+    effective: Dict[str, str] = {**os.environ, **creds}
     needed: set[str] = set()
     for step in steps:
         action = step.get("action") if isinstance(step, dict) else None
-        for key in ACTION_REQUIREMENTS.get(action or "", []):
+        requirement = ACTION_REQUIREMENTS.get(action or "")
+        if requirement is None:
+            continue
+        for key in _resolve_requirement(requirement, effective):
             needed.add(key)
     return sorted(key for key in needed if not effective.get(key))
 
@@ -465,6 +500,90 @@ def parse_single_step():
         return jsonify({"success": False, "error": str(exc)})
 
 
+# ---------------------------------------------------------------------------
+# Video-parse cache
+# ---------------------------------------------------------------------------
+# Gemini video analysis is both slow (10-30s) and metered ($). Uploading the
+# same recording twice is a common UX pattern (user hits the back button, fat-
+# fingers the analyze button). Cache parsed workflow text by SHA256 of the raw
+# bytes so repeat uploads are free and instant.
+
+_VIDEO_CACHE_DIR = os.path.join("data", "video_cache")
+_VIDEO_CACHE_MAX_BYTES = int(os.getenv("VIDEO_CACHE_MAX_MB", "500")) * 1024 * 1024
+
+
+def _video_cache_path(sha256_hex: str) -> str:
+    return os.path.join(_VIDEO_CACHE_DIR, f"{sha256_hex}.json")
+
+
+def _sha256_file(path: str, chunk: int = 1024 * 1024) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(chunk), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _load_video_cache(sha256_hex: str) -> Optional[str]:
+    path = _video_cache_path(sha256_hex)
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        text = data.get("workflow_text")
+        if isinstance(text, str) and text.strip():
+            return text
+    except (OSError, json.JSONDecodeError):
+        return None
+    return None
+
+
+def _save_video_cache(sha256_hex: str, workflow_text: str) -> None:
+    try:
+        os.makedirs(_VIDEO_CACHE_DIR, exist_ok=True)
+        path = _video_cache_path(sha256_hex)
+        payload = {
+            "sha256": sha256_hex,
+            "workflow_text": workflow_text,
+            "cached_at": int(time.time()),
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+        _evict_video_cache_if_needed()
+    except OSError:
+        # Cache is best-effort; never fail a request because we couldn't write.
+        pass
+
+
+def _evict_video_cache_if_needed() -> None:
+    """Evict oldest cache entries if total size exceeds VIDEO_CACHE_MAX_MB."""
+    if not os.path.isdir(_VIDEO_CACHE_DIR):
+        return
+    try:
+        entries = [
+            (os.path.getmtime(os.path.join(_VIDEO_CACHE_DIR, name)),
+             os.path.getsize(os.path.join(_VIDEO_CACHE_DIR, name)),
+             os.path.join(_VIDEO_CACHE_DIR, name))
+            for name in os.listdir(_VIDEO_CACHE_DIR)
+            if name.endswith(".json")
+        ]
+    except OSError:
+        return
+    total = sum(size for _, size, _ in entries)
+    if total <= _VIDEO_CACHE_MAX_BYTES:
+        return
+    entries.sort(key=lambda row: row[0])  # oldest first
+    for _, size, path in entries:
+        if total <= _VIDEO_CACHE_MAX_BYTES:
+            break
+        try:
+            os.unlink(path)
+            total -= size
+        except OSError:
+            continue
+
+
 @app.route("/api/parse-video", methods=["POST"])
 def parse_video():
     """Extract frames from an uploaded video and infer a workflow."""
@@ -504,6 +623,25 @@ def parse_video():
             video_file.save(tmp_file.name)
             video_path = tmp_file.name
 
+        # Content-addressed cache: identical bytes = identical Gemini output.
+        video_hash = _sha256_file(video_path)
+        cached_text = _load_video_cache(video_hash)
+        if cached_text is not None:
+            parser = WorkflowParser()
+            steps = parser.parse_workflow(cached_text)
+            confidence = parser.assess_parse_confidence(steps)
+            return jsonify(
+                {
+                    "success": True,
+                    "steps": [_step_to_dict(s) for s in steps],
+                    "workflow_text": cached_text,
+                    "parse_confidence": confidence,
+                    "ai_assisted": False,
+                    "cached": True,
+                    "video_hash": video_hash,
+                }
+            )
+
         from workflowmvp.video_to_workflow import (
             infer_workflow_from_frames,
             sample_frames_intelligent,
@@ -520,6 +658,8 @@ def parse_video():
                 {"success": False, "error": "AI analysis produced no meaningful workflow"}
             )
 
+        _save_video_cache(video_hash, workflow_text)
+
         parser = WorkflowParser()
         steps = parser.parse_workflow(workflow_text)
         confidence = parser.assess_parse_confidence(steps)
@@ -530,6 +670,8 @@ def parse_video():
                 "workflow_text": workflow_text,
                 "parse_confidence": confidence,
                 "ai_assisted": False,
+                "cached": False,
+                "video_hash": video_hash,
             }
         )
     except Exception as exc:
@@ -712,6 +854,93 @@ def run_workflow_stream():
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
         },
+    )
+
+
+def _extract_tools_from_source(source: str) -> List[str]:
+    """Walk the AST of `source` and return sorted unique get_tool('name') args.
+
+    Picks up both `tools.get_tool("x")` and bare `get_tool("x")`. Only string
+    literals are collected; dynamic names like `get_tool(var)` are ignored.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        is_get_tool = (
+            isinstance(func, ast.Attribute) and func.attr == "get_tool"
+        ) or (isinstance(func, ast.Name) and func.id == "get_tool")
+        if not is_get_tool or not node.args:
+            continue
+        first = node.args[0]
+        if isinstance(first, ast.Constant) and isinstance(first.value, str):
+            names.add(first.value)
+    return sorted(names)
+
+
+def _extract_top_level_imports(source: str) -> List[str]:
+    """Return sorted unique top-level imported module names from `source`."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+    modules: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                modules.add(alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            modules.add(node.module.split(".")[0])
+    return sorted(modules)
+
+
+@app.route("/api/validate-workflow", methods=["POST"])
+def validate_workflow():
+    """Compile a generated workflow script and report tools/imports WITHOUT running it.
+
+    Use-case: give the UI a 'Preview' option that shows what would run
+    (which tools, which imports, whether the script even parses) before the
+    user commits to spending API credits / executing side effects.
+    """
+    payload = request.get_json(silent=True) or {}
+    workflow_path = payload.get("workflow_path", "")
+    abs_path = _resolve_workflow_path(workflow_path)
+    if not abs_path:
+        return jsonify({"success": False, "error": "Workflow file not found"})
+    try:
+        with open(abs_path, encoding="utf-8") as f:
+            source = f.read()
+    except OSError as exc:
+        return jsonify({"success": False, "error": f"Could not read file: {exc}"})
+
+    syntax_ok = True
+    syntax_error: Optional[str] = None
+    try:
+        compile(source, abs_path, "exec")
+    except SyntaxError as exc:
+        syntax_ok = False
+        syntax_error = f"{exc.msg} (line {exc.lineno})"
+
+    tools_used = _extract_tools_from_source(source)
+    registry_tools = {tool.name for tool in ToolRegistry().list_tools()}
+    unknown_tools = [name for name in tools_used if name not in registry_tools]
+
+    return jsonify(
+        {
+            "success": syntax_ok and not unknown_tools,
+            "syntax_ok": syntax_ok,
+            "syntax_error": syntax_error,
+            "tools_used": tools_used,
+            "unknown_tools": unknown_tools,
+            "imports": _extract_top_level_imports(source),
+            "line_count": source.count("\n") + 1,
+            "workflow_path": workflow_path,
+        }
     )
 
 
