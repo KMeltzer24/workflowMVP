@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import argparse
 import ast
-import hashlib
 import json
 import logging
 import os
@@ -63,6 +62,7 @@ load_dotenv()
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 GENERATED_DIR = os.path.join(PROJECT_ROOT, "data", "generated_workflows")
 TEMP_OUTPUTS_DIR = os.path.join(PROJECT_ROOT, "data", "temp_outputs")
+VIDEO_CACHE_DIR = os.path.join(PROJECT_ROOT, "data", "video_cache")
 
 
 def cleanup_files(verbose: bool = True) -> int:
@@ -94,6 +94,16 @@ def cleanup_files(verbose: bool = True) -> int:
             except OSError as exc:
                 if verbose:
                     print(f"  could not delete {path}: {exc}")
+
+    if os.path.isdir(VIDEO_CACHE_DIR):
+        try:
+            shutil.rmtree(VIDEO_CACHE_DIR)
+            count += 1
+            if verbose:
+                print(f"  deleted: {VIDEO_CACHE_DIR}")
+        except OSError as exc:
+            if verbose:
+                print(f"  could not delete {VIDEO_CACHE_DIR}: {exc}")
 
     if verbose:
         print(f"Cleanup complete. Removed {count} items.")
@@ -500,90 +510,6 @@ def parse_single_step():
         return jsonify({"success": False, "error": str(exc)})
 
 
-# ---------------------------------------------------------------------------
-# Video-parse cache
-# ---------------------------------------------------------------------------
-# Gemini video analysis is both slow (10-30s) and metered ($). Uploading the
-# same recording twice is a common UX pattern (user hits the back button, fat-
-# fingers the analyze button). Cache parsed workflow text by SHA256 of the raw
-# bytes so repeat uploads are free and instant.
-
-_VIDEO_CACHE_DIR = os.path.join("data", "video_cache")
-_VIDEO_CACHE_MAX_BYTES = int(os.getenv("VIDEO_CACHE_MAX_MB", "500")) * 1024 * 1024
-
-
-def _video_cache_path(sha256_hex: str) -> str:
-    return os.path.join(_VIDEO_CACHE_DIR, f"{sha256_hex}.json")
-
-
-def _sha256_file(path: str, chunk: int = 1024 * 1024) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for block in iter(lambda: f.read(chunk), b""):
-            h.update(block)
-    return h.hexdigest()
-
-
-def _load_video_cache(sha256_hex: str) -> Optional[str]:
-    path = _video_cache_path(sha256_hex)
-    if not os.path.isfile(path):
-        return None
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        text = data.get("workflow_text")
-        if isinstance(text, str) and text.strip():
-            return text
-    except (OSError, json.JSONDecodeError):
-        return None
-    return None
-
-
-def _save_video_cache(sha256_hex: str, workflow_text: str) -> None:
-    try:
-        os.makedirs(_VIDEO_CACHE_DIR, exist_ok=True)
-        path = _video_cache_path(sha256_hex)
-        payload = {
-            "sha256": sha256_hex,
-            "workflow_text": workflow_text,
-            "cached_at": int(time.time()),
-        }
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(payload, f)
-        _evict_video_cache_if_needed()
-    except OSError:
-        # Cache is best-effort; never fail a request because we couldn't write.
-        pass
-
-
-def _evict_video_cache_if_needed() -> None:
-    """Evict oldest cache entries if total size exceeds VIDEO_CACHE_MAX_MB."""
-    if not os.path.isdir(_VIDEO_CACHE_DIR):
-        return
-    try:
-        entries = [
-            (os.path.getmtime(os.path.join(_VIDEO_CACHE_DIR, name)),
-             os.path.getsize(os.path.join(_VIDEO_CACHE_DIR, name)),
-             os.path.join(_VIDEO_CACHE_DIR, name))
-            for name in os.listdir(_VIDEO_CACHE_DIR)
-            if name.endswith(".json")
-        ]
-    except OSError:
-        return
-    total = sum(size for _, size, _ in entries)
-    if total <= _VIDEO_CACHE_MAX_BYTES:
-        return
-    entries.sort(key=lambda row: row[0])  # oldest first
-    for _, size, path in entries:
-        if total <= _VIDEO_CACHE_MAX_BYTES:
-            break
-        try:
-            os.unlink(path)
-            total -= size
-        except OSError:
-            continue
-
-
 @app.route("/api/parse-video", methods=["POST"])
 def parse_video():
     """Extract frames from an uploaded video and infer a workflow."""
@@ -623,25 +549,6 @@ def parse_video():
             video_file.save(tmp_file.name)
             video_path = tmp_file.name
 
-        # Content-addressed cache: identical bytes = identical Gemini output.
-        video_hash = _sha256_file(video_path)
-        cached_text = _load_video_cache(video_hash)
-        if cached_text is not None:
-            parser = WorkflowParser()
-            steps = parser.parse_workflow(cached_text)
-            confidence = parser.assess_parse_confidence(steps)
-            return jsonify(
-                {
-                    "success": True,
-                    "steps": [_step_to_dict(s) for s in steps],
-                    "workflow_text": cached_text,
-                    "parse_confidence": confidence,
-                    "ai_assisted": False,
-                    "cached": True,
-                    "video_hash": video_hash,
-                }
-            )
-
         from workflowmvp.video_to_workflow import (
             infer_workflow_from_frames,
             sample_frames_intelligent,
@@ -658,8 +565,6 @@ def parse_video():
                 {"success": False, "error": "AI analysis produced no meaningful workflow"}
             )
 
-        _save_video_cache(video_hash, workflow_text)
-
         parser = WorkflowParser()
         steps = parser.parse_workflow(workflow_text)
         confidence = parser.assess_parse_confidence(steps)
@@ -670,8 +575,6 @@ def parse_video():
                 "workflow_text": workflow_text,
                 "parse_confidence": confidence,
                 "ai_assisted": False,
-                "cached": False,
-                "video_hash": video_hash,
             }
         )
     except Exception as exc:
@@ -1019,6 +922,17 @@ def _sse_error(message: str) -> Response:
 # ---------------------------------------------------------------------------
 
 
+def _airplay_hint(port: int) -> str:
+    """Hint shown when port 5000 is in use on macOS."""
+    if sys.platform == "darwin" and port == 5000:
+        return (
+            " On macOS, AirPlay Receiver claims port 5000 by default. Either"
+            " disable it in System Settings > General > AirDrop & Handoff,"
+            " or rerun with `--port 5050` (or any free port)."
+        )
+    return ""
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="WorkflowMVP - Web Interface")
     parser.add_argument(
@@ -1059,6 +973,7 @@ def main() -> None:
     except OSError as exc:
         # Most commonly: port in use.
         message = f"Could not bind to {args.host}:{args.port}: {exc}."
+        print(message + _airplay_hint(args.port))
         sys.exit(1)
 
 

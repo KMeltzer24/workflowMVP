@@ -142,3 +142,4 @@ Thumbs.db
 # Runtime artifacts
 data/generated_workflows/*.py
 data/temp_outputs/*
+data/video_cache/
