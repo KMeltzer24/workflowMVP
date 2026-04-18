@@ -32,8 +32,7 @@ On macOS, `/usr/bin/python3` is often 3.9; use Homebrew `python3.11` (or similar
 - 30 built-in tools including `http_request`, `scrape_webpage`, **`discover_urls`** (sitemap + same-origin links, keyword-ranked), `generate_text`, `read_json` / `write_json`, `append_file`, `hash_file`, `get_current_time`, `read_pdf`, `render_template`, and `fetch_stock_price`.
 - Browser UI with tabs, live streaming output, save/load workflows, and inline credential prompts.
 - **Create** flow: edit parsed steps before *Generate Python code*; saving a step re-parses that line so action/parameters stay aligned.
-- Code generation checks **Python syntax** before writing a script, and the system prompt stresses **no fabricated facts** (fetch real pages/feeds/prices first; `generate_text` summarizes supplied content).
-- Workflow subprocesses default to **`WORKFLOW_QUIET_LOGGERS=1`** so streamed run logs hide noisy `httpx` / Gemini SDK INFO lines (set to `0` to debug).
+- Code generation checks **Python syntax** before writing a script, retries once with a stricter completion instruction if needed, and the system prompt stresses **no fabricated facts** (fetch real pages/feeds/prices first; `generate_text` summarizes supplied content).
 - Credentials stay in your browser's `sessionStorage` or `.env` — never written to disk server-side.
 - Hybrid parsing: rule-based first, AI assist only when confidence is low.
 - Tool safety profile: sandboxed file paths and blocked dangerous shell commands by default.
@@ -160,8 +159,6 @@ registry.register_tool(Tool(
 - **Email fails with "Missing SMTP credentials"** — open *Settings* and fill in `EMAIL_USER`, `EMAIL_PASSWORD`, and `EMAIL_FROM`. Works with any SMTP provider: Gmail (needs an [App Password](https://myaccount.google.com/apppasswords)), Outlook (`smtp-mail.outlook.com:587`), Yahoo (`smtp.mail.yahoo.com:587`), or any custom SMTP server — set `SMTP_SERVER` and `SMTP_PORT` in `.env` accordingly.
 - **Video parse returns no steps** — re-record with slower, clearer interactions or increase `max_frames` in `workflowmvp/video_to_workflow.py`.
 - **"Workflow file not found"** — the file was likely removed by a previous cleanup. Regenerate the workflow and run again.
-- **Codegen error: invalid Python / syntax** — the model returned truncated or malformed code; click *Generate Python code* again or simplify steps.
-- **Run log shows `HTTP Request:` or `AFC is enabled`** — subprocesses set `WORKFLOW_QUIET_LOGGERS=1` by default to hide those lines. Export `WORKFLOW_QUIET_LOGGERS=0` before starting the server if you need full SDK noise.
 
 ## License
 

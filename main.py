@@ -214,8 +214,6 @@ def _build_run_env(creds: Dict[str, str]) -> Dict[str, str]:
         PROJECT_ROOT + (os.pathsep + existing_path if existing_path else "")
     )
     env.update(creds)
-    # Hide httpx / Gemini SDK INFO lines from streamed workflow logs (set to 0 to debug).
-    env.setdefault("WORKFLOW_QUIET_LOGGERS", "1")
     return env
 
 

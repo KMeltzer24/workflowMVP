@@ -51,11 +51,8 @@ def required_api_key_name(provider: str) -> str:
     return API_KEY_ENV_KEYS.get(provider, "GEMINI_API_KEY")
 
 
-def _quiet_third_party_loggers() -> None:
-    """Lower httpx / Google GenAI SDK noise when running workflows in the UI."""
-    flag = (os.getenv("WORKFLOW_QUIET_LOGGERS") or "").strip().lower()
-    if flag not in ("1", "true", "yes"):
-        return
+def _suppress_noisy_client_loggers() -> None:
+    """Keep httpx / Google GenAI SDK traffic on WARNING so INFO logs stay readable."""
     for name in (
         "httpx",
         "httpcore",
@@ -118,7 +115,7 @@ class LLMClient:
         config errors and HTTP errors for network failures.
         """
         self.require_configured()
-        _quiet_third_party_loggers()
+        _suppress_noisy_client_loggers()
         if self.provider == "gemini":
             return self._call_gemini(prompt, max_tokens, temperature)
         return self._call_openai_compatible(prompt, max_tokens, temperature)

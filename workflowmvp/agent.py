@@ -5,14 +5,16 @@ Supports Gemini, Groq, and OpenRouter as LLM backends.
 
 import json
 import re
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from .llm import LLMClient, required_api_key_name
 from .parser import WorkflowStep
 from .tools import ToolRegistry
 
-# Token budget for code generation. 4000 gives headroom for 6+ step workflows.
-_CODE_GEN_MAX_TOKENS = 4000
+# Token budget for code generation (output). Large scripts need headroom.
+_CODE_GEN_MAX_TOKENS = 8192
+# Extra output tokens on automatic retry after a syntax failure.
+_CODE_GEN_RETRY_EXTRA_TOKENS = 4096
 # Token budget for parse-assist (shorter JSON output, less needed).
 _PARSE_ASSIST_MAX_TOKENS = 2000
 
@@ -46,18 +48,44 @@ class WorkflowAgent:
                 f"{key_name} is required for code generation. Set it in .env or pass via credentials."
             )
 
-        prompt = f"{self._create_system_prompt()}\n\n{self._create_user_prompt(steps)}"
-        generated_code = self._extract_python_script(
-            self._generate_text(prompt, max_tokens=_CODE_GEN_MAX_TOKENS)
-        )
-        if not generated_code:
-            raise ValueError("Model returned empty code.")
-        self._validate_generated_python(generated_code)
+        base_prompt = f"{self._create_system_prompt()}\n\n{self._create_user_prompt(steps)}"
+        generated_code, err = self._generate_and_validate_code(base_prompt)
+        if err is not None:
+            raise err
 
         with open(output_file, "w", encoding="utf-8") as f:
             f.write(generated_code)
 
         return generated_code
+
+    def _generate_and_validate_code(
+        self, base_prompt: str
+    ) -> Tuple[str, Optional[ValueError]]:
+        """Call the LLM once; on empty or syntax error, retry with a completion nudge."""
+        last_problem: Optional[ValueError] = None
+        for attempt in range(2):
+            extra = ""
+            if attempt == 1:
+                extra = (
+                    "\n\n## FIX REQUIRED\n"
+                    "The previous answer was rejected: not valid Python (truncated, unfinished, "
+                    "or a syntax error). Output the **entire** script again as a single runnable "
+                    "file: every import through a complete `if __name__ == \"__main__\":` block, "
+                    "with all compound statements having non-empty bodies. No markdown.\n"
+                )
+            budget = _CODE_GEN_MAX_TOKENS + (attempt * _CODE_GEN_RETRY_EXTRA_TOKENS)
+            raw = self._generate_text(base_prompt + extra, max_tokens=budget)
+            code = self._extract_python_script(raw)
+            if not code:
+                last_problem = ValueError("Model returned empty code.")
+                continue
+            try:
+                self._validate_generated_python(code)
+                return code, None
+            except ValueError as exc:
+                last_problem = exc
+                continue
+        return "", last_problem or ValueError("Code generation failed.")
 
     def improve_parsed_steps(
         self, workflow_text: str, rule_steps: List[WorkflowStep]
@@ -172,9 +200,7 @@ Rule-parser draft (for reference):
             compile(code, "<generated_workflow>", "exec")
         except SyntaxError as exc:
             raise ValueError(
-                "Generated code is not valid Python (often truncated output). "
-                f"Syntax error at line {exc.lineno}: {exc.msg}. "
-                "Click Generate again, or shorten/simplify the workflow steps."
+                f"Invalid Python from model (line {exc.lineno}: {exc.msg})."
             ) from exc
 
     @staticmethod
