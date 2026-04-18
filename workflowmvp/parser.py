@@ -288,6 +288,19 @@ class WorkflowParser:
 
         return 'custom', {'description': description}
 
+    # Uppercase abbreviations that users commonly write in workflow descriptions
+    # which are NOT stock tickers. Prevents the bare-uppercase fallback from
+    # turning "Fetch the API stock price" into ticker="API".
+    _NON_TICKER_UPPERCASE = frozenset({
+        'AI', 'API', 'APP', 'APPS', 'ASAP', 'AWS', 'BBC', 'CEO', 'CFO', 'CIO',
+        'CNBC', 'CNN', 'CSS', 'CSV', 'EOD', 'ETF', 'EU', 'FAQ', 'FBI', 'FTP',
+        'FYI', 'GCP', 'GIT', 'GMT', 'GPU', 'HTML', 'HTTP', 'HTTPS', 'ID',
+        'IDE', 'IPO', 'JSON', 'LLM', 'ML', 'MLB', 'NBA', 'NFL', 'NHL', 'NEWS',
+        'NYSE', 'OK', 'OS', 'PDF', 'PHP', 'RAM', 'RSS', 'SDK', 'SQL', 'SSH',
+        'SSL', 'TBD', 'TLS', 'TODO', 'TSV', 'UI', 'UK', 'UN', 'URL', 'US',
+        'USA', 'USD', 'UTC', 'UX', 'VPN', 'XML', 'YAML', 'ZIP',
+    })
+
     def _extract_stock_ticker(self, description: str) -> str:
         """Resolve a ticker symbol without matching common words like 'find'."""
         d = description.strip()
@@ -304,7 +317,9 @@ class WorkflowParser:
             re.IGNORECASE,
         )
         if m:
-            return m.group(1).upper()
+            candidate = m.group(1).upper()
+            if candidate not in self._NON_TICKER_UPPERCASE:
+                return candidate
         m = re.search(
             r'\b(?:ticker|symbol)\s+is\s+([A-Za-z]{1,5})\b',
             d,
@@ -312,9 +327,11 @@ class WorkflowParser:
         )
         if m:
             return m.group(1).upper()
-        m = re.search(r'\b([A-Z]{1,5})\b', d)
-        if m:
-            return m.group(1).upper()
+        # Bare-uppercase fallback: require 2-5 letters and exclude common
+        # non-ticker abbreviations (API, CSV, NEWS, etc.).
+        for candidate in re.findall(r'\b([A-Z]{2,5})\b', d):
+            if candidate not in self._NON_TICKER_UPPERCASE:
+                return candidate
         return ''
 
     def _extract_directory_params(self, description: str) -> Dict[str, Any]:

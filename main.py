@@ -200,6 +200,50 @@ def _ensure_run_dir(run_id: str) -> str:
     return run_dir
 
 
+# POSIX resource caps applied to generated workflow subprocesses. Prevents a
+# runaway script from exhausting host CPU/memory/disk. Bypass by setting
+# WORKFLOW_DISABLE_RLIMIT=1 in the env (useful for long-running LLM calls).
+_RLIMIT_CPU_SECONDS = int(os.getenv("WORKFLOW_RLIMIT_CPU", "120"))
+_RLIMIT_AS_BYTES = int(os.getenv("WORKFLOW_RLIMIT_AS_MB", "1024")) * 1024 * 1024
+_RLIMIT_FSIZE_BYTES = int(os.getenv("WORKFLOW_RLIMIT_FSIZE_MB", "100")) * 1024 * 1024
+
+
+def _apply_workflow_rlimits() -> None:
+    """preexec_fn for workflow subprocesses: cap CPU, address space, file size.
+
+    POSIX only. On Windows (or when WORKFLOW_DISABLE_RLIMIT=1) this is a no-op.
+    """
+    if os.getenv("WORKFLOW_DISABLE_RLIMIT") == "1":
+        return
+    try:
+        import resource  # POSIX-only
+    except ImportError:
+        return
+    try:
+        resource.setrlimit(resource.RLIMIT_CPU, (_RLIMIT_CPU_SECONDS, _RLIMIT_CPU_SECONDS))
+    except (ValueError, OSError):
+        pass
+    try:
+        resource.setrlimit(resource.RLIMIT_AS, (_RLIMIT_AS_BYTES, _RLIMIT_AS_BYTES))
+    except (ValueError, OSError):
+        pass
+    try:
+        resource.setrlimit(resource.RLIMIT_FSIZE, (_RLIMIT_FSIZE_BYTES, _RLIMIT_FSIZE_BYTES))
+    except (ValueError, OSError):
+        pass
+    try:
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    except (ValueError, OSError):
+        pass
+
+
+def _workflow_popen_kwargs() -> Dict[str, Any]:
+    """Extra kwargs for Popen/run that apply POSIX resource caps where available."""
+    if sys.platform == "win32":
+        return {}
+    return {"preexec_fn": _apply_workflow_rlimits}
+
+
 def _missing_requirements(
     steps: Iterable[Dict[str, Any]], creds: Dict[str, str]
 ) -> List[str]:
@@ -226,21 +270,19 @@ def _examples() -> List[Dict[str, str]]:
             "description": "Download the current Bitcoin price, save it to a file, and send a desktop notification.",
             "workflow": (
                 "1. Download https://api.coinbase.com/v2/prices/BTC-USD/spot\n"
-                "2. Process the JSON response to extract the USD price\n"
-                "3. Write the extracted price to file \"bitcoin_price.txt\"\n"
-                "4. Send notification with title \"Bitcoin\" and message \"Price saved\""
+                "2. Write the Bitcoin USD price from the JSON response to file \"bitcoin_price.txt\"\n"
+                "3. Send notification with title \"Bitcoin\" and message \"Price saved\""
             ),
             "requires_credentials": [],
         },
         {
             "name": "CSV Data Processing Pipeline",
-            "description": "Seed a sample users.csv, read it, compute simple stats, and write a report.",
+            "description": "Seed a sample users.csv, read it, and write a report with the average age.",
             "workflow": (
                 "1. Write the text \"name,age\\nAlice,30\\nBob,25\\nCarol,41\\nDan,29\" to file \"users.csv\"\n"
                 "2. Read the CSV file \"users.csv\"\n"
-                "3. Calculate the average age of users\n"
-                "4. Write a summary to file \"report.txt\"\n"
-                "5. Send notification with title \"Pipeline\" and message \"Report generated\""
+                "3. Write a summary containing the average age of users to file \"report.txt\"\n"
+                "4. Send notification with title \"Pipeline\" and message \"Report generated\""
             ),
             "requires_credentials": [],
         },
@@ -591,12 +633,13 @@ def run_workflow():
 
     try:
         result = subprocess.run(
-            ["python3", abs_path],
+            [sys.executable, abs_path],
             cwd=run_dir,
             env=env,
             capture_output=True,
             text=True,
             timeout=120,
+            **_workflow_popen_kwargs(),
         )
         return jsonify(
             {
@@ -634,13 +677,14 @@ def run_workflow_stream():
     def generate() -> Iterable[bytes]:
         yield _sse("status", {"message": "starting", "run_id": run_id})
         proc = subprocess.Popen(  # noqa: S603
-            ["python3", "-u", abs_path],
+            [sys.executable, "-u", abs_path],
             cwd=run_dir,
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
+            **_workflow_popen_kwargs(),
         )
         try:
             assert proc.stdout is not None

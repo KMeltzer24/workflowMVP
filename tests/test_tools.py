@@ -206,12 +206,20 @@ def test_list_files_filters_by_pattern(registry: ToolRegistry, tmp_path: Path) -
     assert result["files"] == ["a.csv"]
 
 
-def test_run_command_blocked_in_safe_mode() -> None:
+def test_run_command_not_registered_in_safe_mode() -> None:
     registry = ToolRegistry(safety_profile="safe")
-    result = registry.get_tool("run_command").function(command="echo hi")
+    assert registry.get_tool("run_command") is None
+    assert "run_command" not in {tool.name for tool in registry.list_tools()}
+
+
+def test_run_command_registered_in_full_mode() -> None:
+    registry = ToolRegistry(safety_profile="full")
+    tool = registry.get_tool("run_command")
+    assert tool is not None
+    # Deny list still rejects obvious footguns even when opted in to full mode.
+    result = tool.function(command="sudo rm -rf /")
     assert result["success"] is False
     assert result.get("blocked") is True
-    assert "safe mode" in result["error"]
 
 
 def test_sandbox_blocks_paths_outside_run_dir(

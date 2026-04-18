@@ -360,16 +360,25 @@ class ToolRegistry:
             }
         ))
 
-        # System operations
-        self.register_tool(Tool(
-            name="run_command",
-            description="Execute system command",
-            function=self._run_command,
-            parameters={
-                "command": "Command to execute",
-                "timeout": "Timeout in seconds (default: 30)"
-            }
-        ))
+        # System operations — only advertised in 'full' mode. In the default
+        # 'safe' mode we intentionally omit run_command so generated code is
+        # forced to use Python builtins / the other registered tools. The
+        # deny-list is a footgun-catcher, not a real sandbox — dropping the
+        # tool entirely is the honest default.
+        if self.safety_profile == "full":
+            self.register_tool(Tool(
+                name="run_command",
+                description=(
+                    "Execute a system shell command. Available only when "
+                    "WORKFLOW_SAFETY_PROFILE=full. Commands run in the sandbox "
+                    "cwd but have full user privileges — not a security boundary."
+                ),
+                function=self._run_command,
+                parameters={
+                    "command": "Command to execute",
+                    "timeout": "Timeout in seconds (default: 30)"
+                }
+            ))
 
         # Web scraping
         self.register_tool(Tool(
