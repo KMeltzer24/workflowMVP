@@ -1019,17 +1019,6 @@ def _sse_error(message: str) -> Response:
 # ---------------------------------------------------------------------------
 
 
-def _airplay_hint(port: int) -> str:
-    """Hint shown when port 5000 is in use on macOS."""
-    if sys.platform == "darwin" and port == 5000:
-        return (
-            " On macOS, AirPlay Receiver claims port 5000 by default. Either"
-            " disable it in System Settings > General > AirDrop & Handoff,"
-            " or rerun with `--port 5050` (or any free port)."
-        )
-    return ""
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="WorkflowMVP - Web Interface")
     parser.add_argument(
@@ -1070,7 +1059,6 @@ def main() -> None:
     except OSError as exc:
         # Most commonly: port in use.
         message = f"Could not bind to {args.host}:{args.port}: {exc}."
-        print(message + _airplay_hint(args.port))
         sys.exit(1)
 
 
