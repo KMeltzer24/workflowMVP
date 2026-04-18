@@ -7,7 +7,6 @@ import hashlib
 import json
 import os
 import re
-from urllib.parse import urldefrag, urljoin, urlparse, urlunparse
 import shutil
 import smtplib
 import sqlite3
@@ -21,6 +20,7 @@ from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Any, Callable, Dict, List, Optional
+from urllib.parse import urldefrag, urljoin, urlparse, urlunparse
 from zoneinfo import ZoneInfo
 
 # macOS system Python is commonly linked against LibreSSL, which triggers a noisy
