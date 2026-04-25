@@ -9,6 +9,11 @@ from typing import Dict, List, Optional, Tuple
 
 from .llm import LLMClient, required_api_key_name
 from .parser import WorkflowStep
+from .tool_contracts import (
+    build_contract_prompt_guidance,
+    build_retry_contract_guidance,
+    validate_tool_contracts,
+)
 from .tools import ToolRegistry
 
 # Token budget for code generation (output). Large scripts need headroom.
@@ -109,27 +114,35 @@ _TOOL_GUIDANCE: Dict[str, str] = {
         "   gen = tools.get_tool('generate_text')\n"
         "   r = gen.function(prompt=\"Write a short poem about SPY closing at $582.10\")\n"
         "   text = r.get('result', '') if r.get('success') else ''\n"
+        "   For **research summaries and markdown reports**, build `prompt` as an **f-string** (or concat) "
+        "that **embeds** scraped/API text (slice to a sane size). Meta-only instructions like "
+        "\"write a comprehensive report\" **without** pasted source excerpts cause fabricated facts — "
+        "avoid that pattern. If extraction yields **no** substantive text/JSON, **stop** before "
+        "`generate_text` / `send_email` with a clear log.\n"
         "   For **reminders, paragraphs, and email bodies**, pass a large enough **max_tokens** "
         "(typically **512–1024**, not ~200) so the model is not cut off mid-sentence."
     ),
     "scrape_webpage": (
         "SCRAPING — scrape_webpage strips HTML tags and returns clean readable text (up to 4000 chars).\n"
+        "   **URL argument:** pass a string URL, or a **`discover_urls` row dict** (the tool reads `url` from it). "
+        "When iterating `response['urls']`, either use **`for e in urls: scrape(..., url=e.get('url'))`** or "
+        "**`urls_only`** so you pass plain strings.\n"
         "   **URL priority:** (1) exact URL from the step / parameters; (2) else discover candidates, then "
-        "scrape the best.\n"
-        "   Slice before passing to generate_text:\n"
-        "   content = (r.get('result') or '')[:3000]\n"
-        "   AVOID scraping Google News / Google Search HTML (news.google.com/topics, /search?, etc.) — "
-        "servers often return 400/403 to automated clients even with browser headers."
+        "scrape the best. Slice before passing to generate_text."
     ),
     "discover_urls": (
         "URL DISCOVERY — discover_urls: When the step names an org/site but **not** a specific program "
         "page, call `discover_urls` with `start_url` = the official homepage (must include `https://`), "
         "and `keywords` = distinctive words from the step (e.g. `sci-fi fantasy short festival seattle`). "
         "It merges **sitemap.xml** (and index → child sitemaps, bounded) with **same-origin links** from "
-        "the homepage, ranks by keyword hits, returns JSON in `result`. Pick the **top-scoring** URL "
-        "(or scrape the top 1–2 if the first is thin), then `scrape_webpage` that URL. Do **not** "
-        "manually guess paths like `/festivals` unless `discover_urls` fails and the step gives no "
-        "better option."
+        "the homepage and ranks by keyword hits. **`start_url` is always a candidate** — if the list is "
+        "thin or other URLs fail filters, **scrape `start_url`** with `scrape_webpage`. Do **not** drop "
+        "the seed URL just because keyword filters do not match. Do **not** manually guess paths like "
+        "`/festivals` unless discovery truly returns nothing useful.\n"
+        "   On success read **`urls`** (list of `{url, score}`) or **`urls_only`** (strings). "
+        "**`result`** is a JSON debug string, not a list of URLs.\n"
+        "   **`keywords`** may be a string or a list of words (e.g. `['dresser', 'plans']`). "
+        "Never use **google.com / bing.com** as `start_url` — use a real publisher or retailer site."
     ),
     "http_request": (
         "HTTP / REST APIs — use http_request for any POST/PUT/DELETE or API with auth:\n"
@@ -233,9 +246,14 @@ class WorkflowAgent:
                 extra = (
                     "\n\n## FIX REQUIRED\n"
                     "The previous answer was rejected: not valid Python (truncated, unfinished, "
-                    "or a syntax error). Output the **entire** script again as a single runnable "
+                    "or a syntax/logic validation error). Output the **entire** script again as a single runnable "
                     "file: every import through a complete `if __name__ == \"__main__\":` block, "
                     "with all compound statements having non-empty bodies. No markdown.\n"
+                    "\nTool contract fixes:\n"
+                    f"{build_retry_contract_guidance()}\n"
+                    "Do NOT emit placeholder logic that says custom steps produced no output and then "
+                    "continues to side effects (e.g., sending email with 'no data'). Operationalize the "
+                    "steps with tools when possible; otherwise fail fast with a clear log and stop.\n"
                 )
             budget = _CODE_GEN_MAX_TOKENS + (attempt * _CODE_GEN_RETRY_EXTRA_TOKENS)
             raw = self._generate_text(base_prompt + extra, max_tokens=budget)
@@ -365,13 +383,30 @@ Rule-parser draft (for reference):
 
     @staticmethod
     def _validate_generated_python(code: str) -> None:
-        """Reject truncated or malformed scripts before they are written to disk."""
+        """Reject malformed scripts and known tool-contract pitfalls."""
         try:
             compile(code, "<generated_workflow>", "exec")
         except SyntaxError as exc:
             raise ValueError(
                 f"Invalid Python from model (line {exc.lineno}: {exc.msg})."
             ) from exc
+
+        # Reject "looks successful but did no work" placeholders for custom
+        # upstream steps. These scripts frequently end by sending an email that
+        # just states no data was generated.
+        copout_markers = (
+            "custom step, no concrete output generated",
+            "did not generate specific data",
+            "no specific research findings or material costs",
+        )
+        lowered = code.lower()
+        if any(marker in lowered for marker in copout_markers):
+            raise ValueError(
+                "Placeholder custom-step output detected. Implement the step with tools "
+                "or fail fast before side effects."
+            )
+
+        validate_tool_contracts(code)
 
     @staticmethod
     def _extract_json_array(text: str) -> List[dict]:
@@ -453,12 +488,19 @@ Rule-parser draft (for reference):
             return ""
         return "## SPECIFIC TOOL GUIDANCE\n\n" + "\n\n".join(included)
 
+    def _build_tool_contract_guidance(self, steps: List[WorkflowStep]) -> str:
+        """Inline response-shape contracts for tools likely to be used."""
+        actions = {step.action for step in steps if step.action}
+        return build_contract_prompt_guidance(actions)
+
     def _create_system_prompt(self, steps: Optional[List[WorkflowStep]] = None) -> str:
         steps = steps or []
         tools_info = self._build_grouped_tool_listing()
         relevant_guidance = self._build_relevant_guidance(steps)
+        contract_guidance = self._build_tool_contract_guidance(steps)
 
-        guidance_block = f"\n\n{relevant_guidance}\n" if relevant_guidance else "\n"
+        guidance_parts = [block for block in (relevant_guidance, contract_guidance) if block]
+        guidance_block = "\n\n" + "\n\n".join(guidance_parts) + "\n" if guidance_parts else "\n"
 
         return f"""You are a Python code generator. Given a list of workflow steps, produce a single runnable Python script.
 
@@ -467,6 +509,8 @@ Rule-parser draft (for reference):
 Do **not** invent facts, dates, times, prices, statistics, schedules, quotes, or other specifics just to make the workflow "succeed." Ground every substantive claim in **tool outputs** (scrape, http_request, download, fetch_stock_price, files, etc.), **deterministic code** the steps require (e.g. `datetime` / `zoneinfo` math), or **verbatim** stable values from the step text (emails, tickers, URLs).
 
 If information is missing or retrieval fails: **stop, log clearly, or say in the user-facing message that it could not be obtained** — never fill gaps with plausible guesses. **`generate_text` must not be used to hallucinate missing real-world facts**; use it only to summarize, rephrase, or format **supplied** text, unless a step explicitly asks for creative or fictional content.
+
+**NO FABRICATION ≠ skip tools:** When steps ask for **web research**, you must still **run** `discover_urls` / `scrape_webpage` / `http_request` (using URLs from the step text when given, otherwise a reasonable official `start_url`). Do **not** emit stub `research.json` files, `"status": "failed"` research payloads, or “URLs not specified” excuses **without** those tool attempts. If every attempt fails, **return before** writing reports or `send_email`.
 
 **Schedules / "when is …":** Retrieve page or feed text first (`scrape_webpage`, `http_request`, `download`), then summarize or email. If the step names an organization but gives no URL, one reasonable attempt at its **official public** site is OK; on failure, do not invent dates. **Best:** put a **direct link** to the program or festival page in the step text when you have one — homepages often omit schedule detail.
 
@@ -493,7 +537,7 @@ Always end with a main() function and:
 
 Always use RELATIVE file paths ("report.txt", "data/output.csv"). Never hardcode absolute paths or /tmp.
 
-**Imports:** Use the Python **standard library** (`datetime`, **`zoneinfo`**) plus packages **already in** project requirements (e.g. `yfinance` when needed). **Do not import `pytz` or `holidays`** — they are not dependencies. For IANA timezones use `zoneinfo.ZoneInfo`. For a **nominal** NYSE/Nasdaq regular cash session close, **16:00 America/New_York on weekdays (Mon–Fri)** is acceptable unless steps say otherwise; **market holidays and early closes are not modeled** unless you use an external API or explicit rules in the step text.
+**Imports:** Use the Python **standard library** (`datetime`, **`zoneinfo`**) plus packages **already in** project requirements (e.g. `yfinance` when needed). **Do not import `pytz` or `holidays`** — they are not dependencies. **Do not `import requests` or `bs4`** — use `http_request` / `scrape_webpage` / `discover_urls` via `ToolRegistry`. For IANA timezones use `zoneinfo.ZoneInfo`. For a **nominal** NYSE/Nasdaq regular cash session close, **16:00 America/New_York on weekdays (Mon–Fri)** is acceptable unless steps say otherwise; **market holidays and early closes are not modeled** unless you use an external API or explicit rules in the step text.
 
 ## TOOL USAGE
 
@@ -510,8 +554,9 @@ On success: read result for the primary string/object output when set. Many tool
        logger.error(f"Failed: {{result.get('error')}}")
        return
 
-When a tool returns JSON as text (e.g. download), parse from result:
-   data = json.loads(result.get('result') or '{{}}'){guidance_block}
+If a tool returns JSON as text (e.g. download), parse from result. But `http_request` may already return a parsed dict/list when response content-type is JSON:
+   raw = result.get('result')
+   data = raw if isinstance(raw, (dict, list)) else json.loads(raw or '{{}}'){guidance_block}
 ## RECORDINGS VS. INTENT (UI-HEAVY STEPS)
 
 If steps read like a **screen recording** (Navigate, Type in search bar, Gmail compose, "Enter X into To/Subject/Body",
@@ -522,6 +567,18 @@ long google.com URLs with tracking params, many consecutive `custom` steps befor
 - Users **edit parsed steps in the app** before codegen; treat each step's **final description, action, and parameters** as the source of truth (not an earlier draft or guessed frame read).
 
 Constants vs. dynamic: use descriptions **exactly** for stable user data (emails, file paths, API URLs, tickers). Recompute anything that depends on "now" or on-page search results.
+
+## CUSTOM STEP HANDLING
+
+Do not treat `custom` as "log and skip". Try to implement the user intent using available tools:
+- For research/discovery steps: use `discover_urls` + `scrape_webpage` / `http_request`.
+- For calculations: compute from retrieved data and explicit step parameters.
+
+**Web research:** Never fabricate `research.json`-style payloads, "illustrative sources", or hardcoded retail **price tables** as a substitute for fetching pages. If the step lacks a URL, run `discover_urls` from a reasonable official `start_url` (user- or step-supplied); only then scrape. If discovery/scraping yields nothing useful, **stop** — do not fill JSON with placeholder materials to "unblock" later steps. Never use **google.com / bing.com** as `discover_urls` start_url — use real project/publisher sites or URLs from the step text.
+
+**Do not “compliance cop out”:** Writing a JSON blob that only says automation failed, then `generate_text` + `send_email` anyway, is wrong. Either deliver **real retrieved content** or **exit early** with logs — no stub research files, no “limitations” attachment run.
+
+If required inputs are truly missing (e.g. no dimensions/prices/source data), **fail fast** with a clear `logger.error(...)` and `return` before any side-effecting step (especially `send_email`). Do not send placeholder "no data generated" completion emails.
 
 ## LOGGING
 

@@ -399,6 +399,47 @@ def test_read_pdf_invalid_pages_returns_error(registry: ToolRegistry, tmp_path: 
     assert "no valid pages" in result["error"].lower()
 
 
+def test_scrape_webpage_accepts_discover_urls_row_dict(registry: ToolRegistry) -> None:
+    """Passing a discover_urls entry dict should resolve the string URL (common codegen mistake)."""
+    html = "<html><body><p>Hello dresser plans</p></body></html>"
+    mock_resp = MagicMock()
+    mock_resp.text = html
+
+    row = {"url": "https://example.org/plans", "score": 2}
+    with patch.object(ToolRegistry, "_request_with_retry", return_value=mock_resp) as req:
+        out = registry.get_tool("scrape_webpage").function(url=row)
+    assert out["success"] is True
+    assert "dresser" in (out.get("result") or "") or "Hello" in (out.get("result") or "")
+    req.assert_called_once()
+    assert req.call_args[0][0] == "https://example.org/plans"
+    assert out.get("url") == "https://example.org/plans"
+
+
+def test_scrape_webpage_rejects_row_dict_without_url_key(registry: ToolRegistry) -> None:
+    out = registry.get_tool("scrape_webpage").function(url={"score": 1})
+    assert out["success"] is False
+    assert "url" in (out.get("error") or "").lower()
+
+
+def test_discover_urls_accepts_keywords_as_list(registry: ToolRegistry) -> None:
+    html = """<html><body>
+    <a href="/dresser-plans">Dresser plans</a>
+    </body></html>"""
+    mock_resp = MagicMock()
+    mock_resp.text = html
+
+    with patch.object(ToolRegistry, "_request_with_retry", return_value=mock_resp):
+        out = registry.get_tool("discover_urls").function(
+            start_url="https://example.org/",
+            keywords=["dresser", "plans"],
+            use_sitemap=False,
+            max_results=10,
+        )
+    assert out["success"] is True
+    urls = [e["url"] for e in out["urls"]]
+    assert any("dresser" in u for u in urls)
+
+
 def test_discover_urls_page_links_and_keywords(registry: ToolRegistry) -> None:
     html = """<html><body>
     <a href="/about">About</a>
@@ -416,6 +457,7 @@ def test_discover_urls_page_links_and_keywords(registry: ToolRegistry) -> None:
         )
     assert out["success"] is True
     urls = [e["url"] for e in out["urls"]]
+    assert out.get("urls_only") == urls
     assert any("sci-fi" in u for u in urls)
     scores = [e["score"] for e in out["urls"]]
     assert scores == sorted(scores, reverse=True)
@@ -428,6 +470,37 @@ def test_discover_urls_requires_scheme_and_host(registry: ToolRegistry) -> None:
         use_page_links=False,
     )
     assert out["success"] is False
+
+
+def test_discover_urls_always_includes_start_url_when_no_links(registry: ToolRegistry) -> None:
+    """If the page has no extractable anchors, discovery must still return the entry URL."""
+    mock_resp = MagicMock()
+    mock_resp.text = "<html><body>No anchors here.</body></html>"
+
+    with patch.object(ToolRegistry, "_request_with_retry", return_value=mock_resp):
+        out = registry.get_tool("discover_urls").function(
+            start_url="https://example.org/howto/build-dresser",
+            keywords="dresser",
+            use_sitemap=False,
+            use_page_links=True,
+            max_results=10,
+        )
+    assert out["success"] is True
+    urls = [e["url"] for e in out["urls"]]
+    assert "https://example.org/howto/build-dresser" in urls
+
+
+def test_discover_urls_start_url_only_when_sitemap_and_links_disabled(registry: ToolRegistry) -> None:
+    """No HTTP fetch is required to list the seed page when both optional sources are off."""
+    out = registry.get_tool("discover_urls").function(
+        start_url="https://example.org/explicit-page",
+        use_sitemap=False,
+        use_page_links=False,
+        max_results=5,
+    )
+    assert out["success"] is True
+    assert out["urls"] == [{"url": "https://example.org/explicit-page", "score": 0}]
+    assert out["urls_only"] == ["https://example.org/explicit-page"]
 
 
 def test_discover_urls_expands_sitemap_index(registry: ToolRegistry) -> None:

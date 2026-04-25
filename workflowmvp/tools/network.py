@@ -51,23 +51,28 @@ class NetworkToolsMixin:
         ))
         self.register_tool(Tool(
             name="scrape_webpage",
-            description="Scrape content from webpage",
+            description=(
+                "Scrape content from a webpage. Pass a URL string, or a discover_urls row dict "
+                "with a 'url' key (the whole entry is accepted for convenience)."
+            ),
             function=self._scrape_webpage,
-            parameters={"url": "URL to scrape"},
+            parameters={"url": "URL string, or {'url': 'https://...', 'score': n} from discover_urls"},
         ))
         self.register_tool(Tool(
             name="discover_urls",
             description=(
                 "Find candidate URLs on a public website without deep crawling: reads sitemap.xml "
                 "(and sitemap index) plus same-origin links from the given page, then ranks URLs "
-                "using optional keywords (e.g. festival name words). Use before scrape_webpage when "
-                "the step names an org but not a specific program page."
+                "using optional keywords (e.g. festival name words). The start_url page is always "
+                "included as a candidate (so you can discover then scrape, or scrape that URL "
+                "directly). On success, use the **urls** list (objects with url/score) or **urls_only** "
+                "(plain strings). The **result** field is a JSON debug string — not a list of URLs."
             ),
             function=self._discover_urls,
             parameters={
                 "start_url": "Entry URL (e.g. https://www.example.org/)",
                 "keywords": (
-                    "Optional: comma/space-separated words to rank URLs (e.g. sci-fi fantasy festival)"
+                    "Optional: string or list of words to rank URLs (e.g. 'dresser plans' or ['dresser', 'plans'])"
                 ),
                 "max_results": "Max URLs to return (default 15, cap 50)",
                 "use_sitemap": "If true (default), try /sitemap.xml and /sitemap_index.xml",
@@ -134,9 +139,21 @@ class NetworkToolsMixin:
         except Exception as exc:
             return {"success": False, "error": str(exc)}
 
+    @staticmethod
+    def _coerce_scrape_url(url: object) -> str:
+        """Accept a URL string or a discover_urls row ``{'url': '...', 'score': ...}``."""
+        if isinstance(url, dict):
+            raw = url.get("url") or url.get("URL")
+            if raw is None:
+                return ""
+            return str(raw).strip()
+        if url is None:
+            return ""
+        return str(url).strip()
+
     def _scrape_webpage(
         self,
-        url: str,
+        url: object,
         selector: Optional[str] = None,
         extract_text: bool = True,
     ) -> Dict[str, Any]:
@@ -148,7 +165,13 @@ class NetworkToolsMixin:
         well inside LLM context limits.
         """
         try:
-            response = self._request_with_retry(url, timeout=30, attempts=3)
+            resolved = self._coerce_scrape_url(url)
+            if not resolved:
+                return {
+                    "success": False,
+                    "error": "url is empty or missing a string 'url' field (pass a page URL or a discover_urls entry).",
+                }
+            response = self._request_with_retry(resolved, timeout=30, attempts=3)
             raw_html = response.text
 
             try:
@@ -171,7 +194,7 @@ class NetworkToolsMixin:
 
             truncated = len(text) > self._SCRAPE_MAX_CHARS
             content = text[: self._SCRAPE_MAX_CHARS] if truncated else text
-            result: Dict[str, Any] = {"success": True, "content": content, "url": url}
+            result: Dict[str, Any] = {"success": True, "content": content, "url": resolved}
             if truncated:
                 result["note"] = (
                     f"Content truncated to {self._SCRAPE_MAX_CHARS} chars "
@@ -330,6 +353,12 @@ class NetworkToolsMixin:
             except (TypeError, ValueError):
                 mr = 15
             max_results = max(1, min(mr, 50))
+            if isinstance(keywords, (list, tuple, set)):
+                keywords = " ".join(
+                    str(x).strip() for x in keywords if str(x).strip()
+                ) or None
+            elif keywords is not None:
+                keywords = str(keywords).strip() or None
             tokens = self._discover_keyword_tokens(keywords)
             best_score: Dict[str, int] = {}
 
@@ -337,6 +366,12 @@ class NetworkToolsMixin:
                 s = self._discover_score(u, link_text, tokens)
                 if u not in best_score or s > best_score[u]:
                     best_score[u] = s
+
+            # Always include the entry page itself. Many sites block or omit sitemaps and expose
+            # few parseable <a> tags; callers still need a concrete URL to scrape.
+            normalized_start = self._normalize_discover_url(start_url, allowed_netloc)
+            if normalized_start:
+                note(normalized_start, "")
 
             if use_sitemap:
                 for u in self._collect_sitemap_locs(base, allowed_netloc):
@@ -361,6 +396,7 @@ class NetworkToolsMixin:
             return {
                 "success": True,
                 "urls": out_list,
+                "urls_only": [u for u, _ in top],
                 "count": len(out_list),
                 "result": summary,
                 "start_url": start_url,
