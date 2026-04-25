@@ -2,11 +2,26 @@
 
 [![ci](https://github.com/KMeltzer24/workflowMVP/actions/workflows/ci.yml/badge.svg)](https://github.com/KMeltzer24/workflowMVP/actions/workflows/ci.yml)
 [![python](https://img.shields.io/badge/python-3.11%2B-blue)](#install)
+[![coverage](https://img.shields.io/badge/coverage-enabled-brightgreen)](#development)
 [![license](https://img.shields.io/badge/license-MIT-green)](#license)
 
 Turn natural-language descriptions — or screen-capture videos — into runnable Python workflows.
 
 WorkflowMVP uses an online LLM (Gemini, Groq, or OpenRouter) to parse descriptions and generate executable Python, backed by a built-in tool registry covering HTTP requests, AI text generation, stock prices, file I/O, email, CSV/JSON, SQLite, compression, and more. Everything runs in a sandboxed directory with live output streamed to the browser.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    user["User text or video"] --> parser["WorkflowParser<br/>(rule-first, AI-assist on low confidence)"]
+    user --> video["video_to_workflow<br/>(OpenCV frame sampler)"]
+    video --> parser
+    parser --> agentNode["WorkflowAgent + LLMClient<br/>(Gemini / Groq / OpenRouter)"]
+    agentNode --> script["data/generated_workflows/*.py<br/>(syntax-validated)"]
+    script --> runner["Flask subprocess runner<br/>(rlimits + sandboxed cwd)"]
+    runner --> tools["ToolRegistry<br/>(30 tools)"]
+    runner --> sse["SSE stream → browser UI"]
+```
 
 ---
 
@@ -35,8 +50,8 @@ On macOS, `/usr/bin/python3` is often 3.9; use Homebrew `python3.11` (or similar
 - Code generation checks **Python syntax** before writing a script, retries once with a stricter completion instruction if needed, and the system prompt stresses **no fabricated facts** (fetch real pages/feeds/prices first; `generate_text` summarizes supplied content).
 - Credentials stay in your browser's `sessionStorage` or `.env` — never written to disk server-side.
 - Hybrid parsing: rule-based first, AI assist only when confidence is low.
-- Tool safety profile: sandboxed file paths and blocked dangerous shell commands by default.
-- Pytest suite + GitHub Actions CI (ruff + pytest on Python 3.11).
+- Tool safety profile: sandboxed file paths, blocked dangerous shell commands by default, **uploads capped at 100 MB**, and the server binds to **`127.0.0.1`** by default.
+- Pytest suite + GitHub Actions CI (ruff + pytest with coverage on Python 3.11 and 3.12).
 
 ## Install
 
@@ -91,6 +106,21 @@ Open <http://localhost:5050>.
 
 For **event or schedule** steps on a public site, prefer a **direct program URL** in the step text when you have one. Otherwise generated code can use **`discover_urls`** (homepage + sitemap + on-page links) to pick a candidate page before **`scrape_webpage`** — it does not crawl arbitrary deep sites.
 
+## Screenshots
+
+> Drop GIFs / PNGs into `docs/screenshots/` and reference them here. Suggested captures:
+>
+> - **Create tab** with parsed steps + edit affordances.
+> - **Run tab** mid-stream (live SSE log).
+> - **Settings** modal with the keys hidden.
+>
+> Example placeholder once you have assets:
+>
+> ```markdown
+> ![Create tab](docs/screenshots/create.png)
+> ![Run streaming](docs/screenshots/run.gif)
+> ```
+
 ## Example workflow
 
 ```
@@ -101,9 +131,26 @@ For **event or schedule** steps on a public site, prefer a **direct program URL*
 
 Paste into the Create tab → *Parse workflow* → *Generate Python code* → *Run*.
 
+## Deployment
+
+WorkflowMVP runs LLM-generated Python on the host, so the server defaults to **`127.0.0.1`** and a 100 MB upload cap. For a small private deployment behind a reverse proxy:
+
+```bash
+pip install -r requirements.txt gunicorn
+HOST=127.0.0.1 PORT=5050 gunicorn --workers 2 --timeout 180 workflowmvp.app:app
+```
+
+Then proxy from nginx / Caddy with TLS terminated upstream. Bind to `0.0.0.0` (via `--host` or `HOST=0.0.0.0`) only on networks you trust — anyone reachable can run arbitrary generated Python with the host's environment. The Linux-specific `rlimit` sandbox layer kicks in automatically when the runner spawns workflow subprocesses.
+
+A starter `Dockerfile` is included for containerized private deployments.
+
+For local-only use, `make run` is sufficient.
+
+See [`CHANGELOG.md`](CHANGELOG.md) for release notes.
+
 ## HTTP API
 
-Routes are implemented in `main.py`; the web UI calls them from `web/static/js/app.js`. POST bodies may include a `credentials` object — those values are merged into the workflow subprocess environment and are not written to disk.
+Routes are implemented in `main.py` (WSGI entrypoint: `workflowmvp.app:app`); the web UI calls them from `web/static/js/app.js`. POST bodies may include a `credentials` object — those values are merged into the workflow subprocess environment and are not written to disk.
 
 ## Development
 
@@ -118,11 +165,15 @@ make clean      # wipe generated scripts, temp outputs, and pytest/ruff caches
 
 ```
 workflowMVP/
-├── main.py                  # Flask app, subprocess runner, SSE streaming, cleanup
+├── main.py                  # Flask routes + API endpoints + local dev entrypoint
+├── Dockerfile               # Containerized deploy starter
 ├── workflowmvp/
+│   ├── app.py               # WSGI import path (`workflowmvp.app:app`)
+│   ├── cli.py               # Server startup helpers (host/port/debug run)
 │   ├── parser.py            # rule-based text → structured steps
 │   ├── agent.py             # LLM-backed code generator (multi-provider)
-│   ├── tools.py             # ToolRegistry: 30 tools
+│   ├── tools/               # ToolRegistry split by category mixins
+│   ├── services/            # runner/examples/credentials/cleanup/static analysis
 │   └── video_to_workflow.py # frame sampling + Gemini vision analysis
 ├── web/
 │   ├── templates/index.html

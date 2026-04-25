@@ -428,3 +428,57 @@ def test_discover_urls_requires_scheme_and_host(registry: ToolRegistry) -> None:
         use_page_links=False,
     )
     assert out["success"] is False
+
+
+def test_discover_urls_expands_sitemap_index(registry: ToolRegistry) -> None:
+    """Sitemap-index XML should be followed one level and child URLs merged.
+
+    Cross-host child URLs must be dropped (same-origin only).
+    """
+    sitemap_index = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        "<sitemap><loc>https://example.org/sitemap-pages.xml</loc></sitemap>"
+        "</sitemapindex>"
+    )
+    sitemap_pages = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        "<url><loc>https://example.org/festivals/sci-fi</loc></url>"
+        "<url><loc>https://example.org/festivals/fantasy</loc></url>"
+        "<url><loc>https://other-host.example.com/should-be-dropped</loc></url>"
+        "</urlset>"
+    )
+    homepage_html = (
+        "<html><body>"
+        "<a href=\"/about\">About</a>"
+        "</body></html>"
+    )
+
+    def fake_request(url: str, **_kwargs):
+        resp = MagicMock()
+        if url.endswith("/sitemap.xml"):
+            resp.text = sitemap_index
+        elif url.endswith("/sitemap-pages.xml"):
+            resp.text = sitemap_pages
+        else:
+            resp.text = homepage_html
+        return resp
+
+    with patch.object(ToolRegistry, "_request_with_retry", side_effect=fake_request):
+        out = registry.get_tool("discover_urls").function(
+            start_url="https://example.org/",
+            keywords="sci-fi festival",
+            use_sitemap=True,
+            use_page_links=True,
+            max_results=20,
+        )
+
+    assert out["success"] is True
+    urls = [entry["url"] for entry in out["urls"]]
+    assert "https://example.org/festivals/sci-fi" in urls
+    assert "https://example.org/festivals/fantasy" in urls
+    # Cross-host loc must be filtered out.
+    assert not any("other-host.example.com" in u for u in urls)
+    # Same-origin homepage anchor still allowed.
+    assert any(u.endswith("/about") for u in urls)

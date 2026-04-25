@@ -5,7 +5,7 @@ Supports Gemini, Groq, and OpenRouter as LLM backends.
 
 import json
 import re
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from .llm import LLMClient, required_api_key_name
 from .parser import WorkflowStep
@@ -17,6 +17,170 @@ _CODE_GEN_MAX_TOKENS = 8192
 _CODE_GEN_RETRY_EXTRA_TOKENS = 4096
 # Token budget for parse-assist (shorter JSON output, less needed).
 _PARSE_ASSIST_MAX_TOKENS = 2000
+
+
+# Tool name -> category. Categories drive how the system prompt groups the
+# available-tools listing and which inline guidance blocks get included for
+# the steps the user actually asked for.
+_TOOL_CATEGORIES: Dict[str, str] = {
+    # filesystem & files
+    "read_file": "filesystem",
+    "write_file": "filesystem",
+    "append_file": "filesystem",
+    "list_files": "filesystem",
+    "create_directory": "filesystem",
+    "copy_file": "filesystem",
+    "move_file": "filesystem",
+    "delete_file": "filesystem",
+    "hash_file": "filesystem",
+    "read_csv": "filesystem",
+    "write_csv": "filesystem",
+    "read_json": "filesystem",
+    "write_json": "filesystem",
+    "read_pdf": "filesystem",
+    # archive
+    "compress_files": "archive",
+    "extract_archive": "archive",
+    # network
+    "download": "network",
+    "http_request": "network",
+    "scrape_webpage": "network",
+    "discover_urls": "network",
+    # finance
+    "fetch_stock_price": "finance",
+    # ai
+    "generate_text": "ai",
+    "render_template": "ai",
+    # time
+    "wait": "time",
+    "get_current_time": "time",
+    # comms
+    "send_email": "comms",
+    "send_notification": "comms",
+    # system
+    "run_command": "system",
+    # database
+    "sqlite_query": "database",
+    "sqlite_insert": "database",
+}
+
+_CATEGORY_ORDER = (
+    "filesystem",
+    "archive",
+    "network",
+    "finance",
+    "ai",
+    "time",
+    "comms",
+    "system",
+    "database",
+)
+
+_CATEGORY_LABELS: Dict[str, str] = {
+    "filesystem": "Files & I/O",
+    "archive": "Archive",
+    "network": "Network & Web",
+    "finance": "Finance",
+    "ai": "AI & Templating",
+    "time": "Time",
+    "comms": "Communications",
+    "system": "System",
+    "database": "Database",
+}
+
+# Per-tool guidance snippets. Only the entries whose key (a tool name OR a
+# category) appears in the workflow are emitted in the system prompt. This
+# keeps the prompt short for small workflows while preserving the deep
+# guidance the agent relies on for the trickier tools.
+_TOOL_GUIDANCE: Dict[str, str] = {
+    "send_email": (
+        "EMAIL — send_email: recipient, subject, body (plain text), plus optional attachments "
+        "(list of relative file paths or one string path). Files are sent as real MIME attachments. "
+        "You may use a short body like \"See attached.\" when attaching. Without attachments, body "
+        "carries the full message. Never invent email_from — omit it or use os.getenv('EMAIL_FROM').\n"
+        "   **Recipient:** use the address **exactly** as written in the send-email step (same spelling "
+        "and digits, e.g. `kevinmeltzer1@gmail.com` vs `kevinnmeltzer@gmail.com`). Do not substitute a "
+        "different address.\n"
+        "   email_tool = tools.get_tool('send_email')\n"
+        "   email_tool.function(recipient='you@example.com', subject='...', body='...', attachments=['report.md'])"
+    ),
+    "generate_text": (
+        "AI TEXT GENERATION — for summarising, translating, or **creative** tasks when the step allows it:\n"
+        "   gen = tools.get_tool('generate_text')\n"
+        "   r = gen.function(prompt=\"Write a short poem about SPY closing at $582.10\")\n"
+        "   text = r.get('result', '') if r.get('success') else ''\n"
+        "   For **reminders, paragraphs, and email bodies**, pass a large enough **max_tokens** "
+        "(typically **512–1024**, not ~200) so the model is not cut off mid-sentence."
+    ),
+    "scrape_webpage": (
+        "SCRAPING — scrape_webpage strips HTML tags and returns clean readable text (up to 4000 chars).\n"
+        "   **URL priority:** (1) exact URL from the step / parameters; (2) else discover candidates, then "
+        "scrape the best.\n"
+        "   Slice before passing to generate_text:\n"
+        "   content = (r.get('result') or '')[:3000]\n"
+        "   AVOID scraping Google News / Google Search HTML (news.google.com/topics, /search?, etc.) — "
+        "servers often return 400/403 to automated clients even with browser headers."
+    ),
+    "discover_urls": (
+        "URL DISCOVERY — discover_urls: When the step names an org/site but **not** a specific program "
+        "page, call `discover_urls` with `start_url` = the official homepage (must include `https://`), "
+        "and `keywords` = distinctive words from the step (e.g. `sci-fi fantasy short festival seattle`). "
+        "It merges **sitemap.xml** (and index → child sitemaps, bounded) with **same-origin links** from "
+        "the homepage, ranks by keyword hits, returns JSON in `result`. Pick the **top-scoring** URL "
+        "(or scrape the top 1–2 if the first is thin), then `scrape_webpage` that URL. Do **not** "
+        "manually guess paths like `/festivals` unless `discover_urls` fails and the step gives no "
+        "better option."
+    ),
+    "http_request": (
+        "HTTP / REST APIs — use http_request for any POST/PUT/DELETE or API with auth:\n"
+        "   api = tools.get_tool('http_request')\n"
+        "   r = api.function(url='https://...', method='POST', body={'key': 'value'})"
+    ),
+    "fetch_stock_price": (
+        "STOCK / FINANCIAL DATA — prefer fetch_stock_price over scraping finance websites.\n"
+        "- **Ticker:** use the **exact** symbol from the step description or parameters (e.g. `SPY` vs "
+        "`BTC-USD`). Never swap in a different instrument.\n"
+        "- **Single latest close:** fetch_stock_price(ticker='SPY', period='1d'). On success read price, "
+        "ticker, and currency from the returned dict. Common tickers: ^GSPC, ^DJI, ^IXIC, BTC-USD.\n"
+        "- **Multi-bar math** (e.g. compare first vs last close in the same history window): import "
+        "yfinance as yf inside the script and use Ticker(...).history(period=...). Use yfinance only "
+        "for this price series, not for scraping webpages. fetch_stock_price exposes the latest bar "
+        "from its window, not the full DataFrame for custom comparisons.\n"
+        "   import yfinance as yf\n"
+        "   hist = yf.Ticker('SPY').history(period='5d')\n"
+        "   price_now   = float(hist['Close'].iloc[-1])\n"
+        "   price_then  = float(hist['Close'].iloc[0])\n"
+        "   change      = price_now - price_then\n"
+        "   direction   = 'up' if change >= 0 else 'down'"
+    ),
+    "read_pdf": (
+        "PDF — read_pdf: pass file_path and optional pages (range string or list). Extracted text is "
+        "in result (and text)."
+    ),
+    "render_template": (
+        "TEMPLATES — render_template: pass template (Jinja2 string) and variables dict. Missing variable "
+        "names fail (StrictUndefined). Output string is in result (and rendered)."
+    ),
+    "read_json": (
+        "JSON FILES — read_json / write_json for structured config and API payloads (prefer over manual "
+        "string concat):\n"
+        "   rj = tools.get_tool('read_json')\n"
+        "   r = rj.function(file_path='config.json')\n"
+        "   data = r.get('data') if r.get('success') else {}\n"
+        "   wj = tools.get_tool('write_json')\n"
+        "   wj.function(file_path='out.json', data={'ok': True}, indent=2)"
+    ),
+    "append_file": "APPEND / LOG LINES — append_file adds text without reading the whole file first.",
+    "hash_file": "FILE INTEGRITY — hash_file(file_path='backup.zip', algorithm='sha256') returns hex_digest.",
+    "get_current_time": (
+        "DATE & TIME — get_current_time(timezone='…') returns iso, unix, timezone (any **IANA** name). "
+        "Use for clocks in workflows and emails; combine with `zoneinfo` in code when you need "
+        "arithmetic without an extra dependency."
+    ),
+}
+
+# Always-on guidance (regardless of which tools the workflow uses).
+_ALWAYS_ON_GUIDANCE_KEYS = ("generate_text",)
 
 
 class WorkflowAgent:
@@ -48,7 +212,7 @@ class WorkflowAgent:
                 f"{key_name} is required for code generation. Set it in .env or pass via credentials."
             )
 
-        base_prompt = f"{self._create_system_prompt()}\n\n{self._create_user_prompt(steps)}"
+        base_prompt = f"{self._create_system_prompt(steps)}\n\n{self._create_user_prompt(steps)}"
         generated_code, err = self._generate_and_validate_code(base_prompt)
         if err is not None:
             raise err
@@ -134,15 +298,21 @@ Rule-parser draft (for reference):
         text = (self._generate_text(prompt, max_tokens=_PARSE_ASSIST_MAX_TOKENS) or "").strip()
         payload = self._extract_json_array(text)
 
+        valid_actions = set(tool_names) | {"custom"}
         improved: List[WorkflowStep] = []
         for idx, item in enumerate(payload, start=1):
             if not isinstance(item, dict):
                 continue
+            action = str(item.get("action") or "custom").strip()
+            if action not in valid_actions:
+                # The model invented an action that the registry can't run.
+                # Down-grade rather than passing a bogus name to codegen.
+                action = "custom"
             improved.append(
                 WorkflowStep(
                     step_id=str(item.get("step_id") or f"step_{idx}"),
                     description=str(item.get("description") or "").strip(),
-                    action=str(item.get("action") or "custom").strip(),
+                    action=action,
                     parameters=item.get("parameters") if isinstance(item.get("parameters"), dict) else {},
                     dependencies=item.get("dependencies") if isinstance(item.get("dependencies"), list) else [],
                 )
@@ -226,11 +396,69 @@ Rule-parser draft (for reference):
     # Prompt construction
     # ------------------------------------------------------------------
 
-    def _create_system_prompt(self) -> str:
-        tools_info = "\n".join(
-            f"- {t.name}: {t.description}\n  Parameters: {', '.join(t.parameters.keys())}"
-            for t in self.tool_registry.list_tools()
-        )
+    def _build_grouped_tool_listing(self) -> str:
+        """Group the available-tools listing by category for readability.
+
+        The LLM still sees every tool, but the list is organised so smaller
+        models stay on-task and bigger models waste fewer tokens scanning a
+        flat block of 30 entries.
+        """
+        by_category: Dict[str, List[str]] = {}
+        for tool in self.tool_registry.list_tools():
+            category = _TOOL_CATEGORIES.get(tool.name, "system")
+            line = (
+                f"- {tool.name}: {tool.description}\n"
+                f"  Parameters: {', '.join(tool.parameters.keys())}"
+            )
+            by_category.setdefault(category, []).append(line)
+
+        sections: List[str] = []
+        for category in _CATEGORY_ORDER:
+            entries = by_category.get(category)
+            if not entries:
+                continue
+            label = _CATEGORY_LABELS.get(category, category.title())
+            sections.append(f"### {label}\n" + "\n".join(entries))
+        # Append any unrecognised categories at the end (defensive).
+        for category, entries in by_category.items():
+            if category in _CATEGORY_ORDER:
+                continue
+            label = _CATEGORY_LABELS.get(category, category.title())
+            sections.append(f"### {label}\n" + "\n".join(entries))
+        return "\n\n".join(sections)
+
+    def _build_relevant_guidance(self, steps: List[WorkflowStep]) -> str:
+        """Inline only the per-tool guidance that matches actions in steps.
+
+        The full guidance text is sizeable (~2 KB). For a 3-step "fetch SPY,
+        write file, send email" workflow we only need the EMAIL +
+        fetch_stock_price + generate_text snippets. For the bigger festival
+        workflow we additionally pull in scraping + discovery.
+
+        Always-on entries (e.g. ``generate_text``) are included even when no
+        step explicitly maps to them, because the agent often falls back to
+        ``generate_text`` to format an email body.
+        """
+        actions = {step.action for step in steps if step.action}
+        included: List[str] = []
+        seen: set[str] = set()
+        for key in (*_ALWAYS_ON_GUIDANCE_KEYS, *actions):
+            if key in seen:
+                continue
+            snippet = _TOOL_GUIDANCE.get(key)
+            if snippet:
+                included.append(snippet)
+                seen.add(key)
+        if not included:
+            return ""
+        return "## SPECIFIC TOOL GUIDANCE\n\n" + "\n\n".join(included)
+
+    def _create_system_prompt(self, steps: Optional[List[WorkflowStep]] = None) -> str:
+        steps = steps or []
+        tools_info = self._build_grouped_tool_listing()
+        relevant_guidance = self._build_relevant_guidance(steps)
+
+        guidance_block = f"\n\n{relevant_guidance}\n" if relevant_guidance else "\n"
 
         return f"""You are a Python code generator. Given a list of workflow steps, produce a single runnable Python script.
 
@@ -252,6 +480,8 @@ Always begin with:
    from dotenv import load_dotenv
    from workflowmvp.tools import ToolRegistry
    logging.basicConfig(level=logging.INFO, format='%(message)s')
+   # Keep noisy SDK request logs quiet in the *generated subprocess*.
+   # (The parent Flask/LLM process separately suppresses these in llm.py.)
    for _lib in ('httpx', 'httpcore', 'urllib3', 'google_genai'):
        logging.getLogger(_lib).setLevel(logging.WARNING)
    logger = logging.getLogger(__name__)
@@ -281,72 +511,7 @@ On success: read result for the primary string/object output when set. Many tool
        return
 
 When a tool returns JSON as text (e.g. download), parse from result:
-   data = json.loads(result.get('result') or '{{}}')
-
-## SPECIFIC TOOL GUIDANCE
-
-EMAIL — send_email: recipient, subject, body (plain text), plus optional attachments (list of relative file paths or one string path). Files are sent as real MIME attachments. You may use a short body like "See attached." when attaching. Without attachments, body carries the full message. Never invent email_from — omit it or use os.getenv('EMAIL_FROM').
-   **Recipient:** use the address **exactly** as written in the send-email step (same spelling and digits, e.g. `kevinmeltzer1@gmail.com` vs `kevinnmeltzer@gmail.com`). Do not substitute a different address.
-   email_tool = tools.get_tool('send_email')
-   email_tool.function(recipient='you@example.com', subject='...', body='...', attachments=['report.md'])
-
-AI TEXT GENERATION — for summarising, translating, or **creative** tasks when the step allows it:
-   gen = tools.get_tool('generate_text')
-   r = gen.function(prompt="Write a short poem about SPY closing at $582.10")
-   text = r.get('result', '') if r.get('success') else ''
-   For **reminders, paragraphs, and email bodies**, pass a large enough **max_tokens** (typically **512–1024**, not ~200) so the model is not cut off mid-sentence.
-
-SCRAPING — scrape_webpage strips HTML tags and returns clean readable text (up to 4000 chars).
-   **URL priority:** (1) exact URL from the step / parameters; (2) else discover candidates, then scrape the best.
-
-   **discover_urls** — When the step names an org/site but **not** a specific program page, call `discover_urls` with `start_url` = the official homepage (must include `https://`), and `keywords` = distinctive words from the step (e.g. `sci-fi fantasy short festival seattle`). It merges **sitemap.xml** (and index → child sitemaps, bounded) with **same-origin links** from the homepage, ranks by keyword hits, returns JSON in `result`. Pick the **top-scoring** URL (or scrape the top 1–2 if the first is thin), then `scrape_webpage` that URL. Do **not** manually guess paths like `/festivals` unless `discover_urls` fails and the step gives no better option.
-
-   Slice before passing to generate_text:
-   content = (r.get('result') or '')[:3000]
-
-   AVOID scraping Google News / Google Search HTML (news.google.com/topics, /search?, etc.) — servers often return 400/403 to automated clients even with browser headers.
-
-NEWS HEADLINES (no page URL in the workflow) — use download or http_request on a public RSS/Atom or JSON **feed URL** from the step (or a stable feed the user names). Pass the response body to generate_text to summarize. Do not scrape Google News HTML.
-
-   Example `generate_text` prompt when you already have page/feed **content** (adjust the task string as needed):
-   gen.function(prompt=(
-       f"Using ONLY the information below, write a reminder message.\\n"
-       f"If dates, times, or location are not present, say so — do not invent them.\\n\\n"
-       f"Content:\\n{{content}}"
-   ))
-
-STOCK / FINANCIAL DATA — prefer fetch_stock_price over scraping finance websites.
-- **Ticker:** use the **exact** symbol from the step description or parameters (e.g. `SPY` vs `BTC-USD`). Never swap in a different instrument.
-- **Single latest close:** fetch_stock_price(ticker='SPY', period='1d'). On success read price, ticker, and currency from the returned dict. Common tickers: ^GSPC, ^DJI, ^IXIC, BTC-USD.
-- **Multi-bar math** (e.g. compare first vs last close in the same history window): import yfinance as yf inside the script and use Ticker(...).history(period=...). Use yfinance only for this price series, not for scraping webpages. fetch_stock_price exposes the latest bar from its window, not the full DataFrame for custom comparisons.
-   import yfinance as yf
-   hist = yf.Ticker('SPY').history(period='5d')
-   price_now   = float(hist['Close'].iloc[-1])
-   price_then  = float(hist['Close'].iloc[0])
-   change      = price_now - price_then
-   direction   = 'up' if change >= 0 else 'down'
-
-PDF — read_pdf: pass file_path and optional pages (range string or list). Extracted text is in result (and text).
-
-TEMPLATES — render_template: pass template (Jinja2 string) and variables dict. Missing variable names fail (StrictUndefined). Output string is in result (and rendered).
-
-HTTP / REST APIs — use http_request for any POST/PUT/DELETE or API with auth:
-   api = tools.get_tool('http_request')
-   r = api.function(url='https://...', method='POST', body={{'key': 'value'}})
-
-JSON FILES — read_json / write_json for structured config and API payloads (prefer over manual string concat):
-   rj = tools.get_tool('read_json')
-   r = rj.function(file_path='config.json')
-   data = r.get('data') if r.get('success') else {{}}
-   wj = tools.get_tool('write_json')
-   wj.function(file_path='out.json', data={{'ok': True}}, indent=2)
-
-APPEND / LOG LINES — append_file adds text without reading the whole file first.
-
-FILE INTEGRITY — hash_file(file_path='backup.zip', algorithm='sha256') returns hex_digest.
-
-DATE & TIME — get_current_time(timezone='…') returns iso, unix, timezone (any **IANA** name). Use for clocks in workflows and emails; combine with `zoneinfo` in code when you need arithmetic without an extra dependency.
-
+   data = json.loads(result.get('result') or '{{}}'){guidance_block}
 ## RECORDINGS VS. INTENT (UI-HEAVY STEPS)
 
 If steps read like a **screen recording** (Navigate, Type in search bar, Gmail compose, "Enter X into To/Subject/Body",

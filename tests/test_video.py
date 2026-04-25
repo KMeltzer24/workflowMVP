@@ -68,6 +68,18 @@ def test_parse_video_requires_gemini_api_key(
     assert "GEMINI_API_KEY" in payload["error"]
 
 
+def test_parse_video_rejects_non_video_mime(client) -> None:
+    data = {
+        "video": (io.BytesIO(b"not a video"), "evil.exe", "application/x-msdownload"),
+    }
+    response = client.post(
+        "/api/parse-video", data=data, content_type="multipart/form-data"
+    )
+    payload = response.get_json()
+    assert payload["success"] is False
+    assert "Unsupported file type" in payload["error"]
+
+
 # ---------------------------------------------------------------------------
 # Frame diff scoring
 # ---------------------------------------------------------------------------

@@ -92,6 +92,48 @@ def test_system_prompt_has_structural_sections(agent: WorkflowAgent) -> None:
         assert header in prompt, f"system prompt missing section '{header}'"
 
 
+def test_system_prompt_groups_tools_by_category(agent: WorkflowAgent) -> None:
+    prompt = agent._create_system_prompt()
+    for label in ("Files & I/O", "Network & Web", "Communications"):
+        assert f"### {label}" in prompt
+
+
+def test_system_prompt_inlines_only_relevant_guidance(agent: WorkflowAgent) -> None:
+    """Steps that don't use scraping/discovery should not get those snippets."""
+    steps = [
+        WorkflowStep(
+            step_id="step_1",
+            description="Write hi to file out.txt",
+            action="write_file",
+            parameters={"file_path": "out.txt"},
+            dependencies=[],
+        )
+    ]
+    prompt = agent._create_system_prompt(steps)
+    # generate_text guidance is always-on for codegen flexibility.
+    assert "AI TEXT GENERATION" in prompt
+    # No scraping in this workflow → no SCRAPING block.
+    assert "SCRAPING — scrape_webpage" not in prompt
+    # No fetch_stock_price step → no STOCK guidance.
+    assert "STOCK / FINANCIAL DATA" not in prompt
+
+
+def test_system_prompt_includes_specific_guidance_when_action_present(
+    agent: WorkflowAgent,
+) -> None:
+    steps = [
+        WorkflowStep(
+            step_id="step_1",
+            description="Send email to me@example.com",
+            action="send_email",
+            parameters={"recipient": "me@example.com"},
+            dependencies=[],
+        )
+    ]
+    prompt = agent._create_system_prompt(steps)
+    assert "EMAIL — send_email" in prompt
+
+
 # ---------------------------------------------------------------------------
 # generate_workflow_code with a fully mocked LLM response
 # ---------------------------------------------------------------------------

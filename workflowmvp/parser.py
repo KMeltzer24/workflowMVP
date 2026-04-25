@@ -92,14 +92,15 @@ class WorkflowParser:
                 )
                 step_counter += 1
                 i += 1
-            elif current_step and (raw_line.startswith(('  ', '\t')) or not self._is_step_start(line)):
-                # This is a continuation or parameter of the current step
-                current_step.description += f" {line.strip()}"
+            elif current_step and self._is_continuation_line(raw_line):
+                current_step.description += f" {line}"
                 action, params = self._extract_action_and_params(current_step.description)
                 current_step.action = action
                 current_step.parameters.update(params)
                 i += 1
             else:
+                # Non-step, non-continuation prose between steps is ignored on
+                # purpose so pasted intros/outros don't pollute step descriptions.
                 i += 1
 
         if current_step:
@@ -162,6 +163,18 @@ class WorkflowParser:
             r'^\*\s+',
         ]
         return any(re.match(pattern, line) for pattern in patterns)
+
+    @staticmethod
+    def _is_continuation_line(raw_line: str) -> bool:
+        """A line is a continuation of the previous step only if it is indented
+        or starts with a visible continuation marker. This prevents pasted
+        paragraphs between numbered steps from being merged into the previous
+        step description.
+        """
+        if raw_line.startswith(("  ", "\t")):
+            return True
+        stripped = raw_line.lstrip()
+        return stripped.startswith((">", "→", "↳"))
 
     def _extract_description(self, line: str) -> str:
         """Extract the description from a step line"""
@@ -308,7 +321,20 @@ class WorkflowParser:
     })
 
     def _extract_stock_ticker(self, description: str) -> str:
-        """Resolve a ticker symbol without matching common words like 'find'."""
+        """Resolve a ticker symbol from explicit markers only.
+
+        Matches (in order):
+          - `^GSPC`, `^DJI`, etc. (Yahoo index syntax)
+          - `BTC-USD`, `ETH-USD`, etc. (crypto/forex pairs)
+          - `$AAPL` / `$BRK.B` (cashtag)
+          - "price of <TICKER>" / "cost of <TICKER>" with deny-listed words filtered
+          - "ticker <X>" / "ticker is <X>" / "symbol <X>"
+
+        Bare uppercase tokens are NOT treated as tickers anymore — too many
+        false positives (USA, ASAP, ETF, etc.). When no explicit marker is
+        present we return ''; the user can edit the step or fill the parameter
+        manually before code generation.
+        """
         d = description.strip()
         m = re.search(r'\^[A-Za-z]{1,10}\b', d)
         if m:
@@ -317,8 +343,11 @@ class WorkflowParser:
         if m:
             sym = m.group(0)
             return sym[:-4].upper() + '-USD'
+        m = re.search(r'\$([A-Za-z]{1,5}(?:\.[A-Za-z])?)\b', d)
+        if m:
+            return m.group(1).upper()
         m = re.search(
-            r'\b(?:price|cost)\s+of\s+(?:the\s+)?([A-Za-z]{1,5})\b',
+            r'\b(?:price|cost|quote)\s+of\s+(?:the\s+)?([A-Za-z]{1,5})\b',
             d,
             re.IGNORECASE,
         )
@@ -327,15 +356,12 @@ class WorkflowParser:
             if candidate not in self._NON_TICKER_UPPERCASE:
                 return candidate
         m = re.search(
-            r'\b(?:ticker|symbol)\s+is\s+([A-Za-z]{1,5})\b',
+            r'\b(?:ticker|symbol)(?:\s+is)?\s+([A-Za-z]{1,5})\b',
             d,
             re.IGNORECASE,
         )
         if m:
-            return m.group(1).upper()
-        # Bare-uppercase fallback: require 2-5 letters and exclude common
-        # non-ticker abbreviations (API, CSV, NEWS, etc.).
-        for candidate in re.findall(r'\b([A-Z]{2,5})\b', d):
+            candidate = m.group(1).upper()
             if candidate not in self._NON_TICKER_UPPERCASE:
                 return candidate
         return ''
@@ -497,17 +523,39 @@ class WorkflowParser:
 
         return params
 
-    def _resolve_dependencies(self, steps: List[WorkflowStep]):
-        """Resolve dependencies between steps with enhanced logic"""
-        for i, step in enumerate(steps):
-            # Enhanced dependency resolution
-            if i > 0:
-                step.dependencies.append(steps[i-1].step_id)
+    _EXPLICIT_DEP_REGEX = re.compile(
+        r"\b(?:step[\s_]*(\d+)|previous\s+step|the\s+result|the\s+output|that\s+(?:file|message|email|value))\b",
+        re.IGNORECASE,
+    )
 
-            # Look for explicit dependencies in the description
-            if 'using' in step.description.lower() or 'from' in step.description.lower():
-                # Try to find which previous step this depends on
-                for j in range(i):
-                    if any(word in step.description.lower() for word in steps[j].description.lower().split()):
-                        if steps[j].step_id not in step.dependencies:
-                            step.dependencies.append(steps[j].step_id)
+    def _resolve_dependencies(self, steps: List[WorkflowStep]):
+        """Link steps only when the user wrote explicit data-flow markers.
+
+        We deliberately do NOT chain every step to its predecessor. The agent
+        prompt already preserves ordering, and unconditional chaining
+        over-constrains the LLM and produced spurious deps for parallel work.
+
+        We add a dependency when the description references:
+          - ``step <N>`` / ``step_<N>``
+          - ``previous step`` / ``the result`` / ``the output`` /
+            ``that file|message|email|value``
+        In each case we link to the most recent prior step (or the explicit N).
+        """
+        for i, step in enumerate(steps):
+            if i == 0:
+                continue
+            text = step.description.lower()
+            for match in self._EXPLICIT_DEP_REGEX.finditer(text):
+                explicit_n = match.group(1)
+                if explicit_n is not None:
+                    try:
+                        n = int(explicit_n)
+                    except ValueError:
+                        continue
+                    target_id = f"step_{n}"
+                    if any(s.step_id == target_id for s in steps[:i]) and target_id not in step.dependencies:
+                        step.dependencies.append(target_id)
+                else:
+                    target_id = steps[i - 1].step_id
+                    if target_id not in step.dependencies:
+                        step.dependencies.append(target_id)

@@ -212,10 +212,14 @@ def test_validate_workflow_rejects_out_of_tree_path(client, tmp_path) -> None:
 
 def test_validate_workflow_reports_tools_and_imports(client, tmp_path, monkeypatch) -> None:
     import main as main_module
+    from workflowmvp.services import paths as services_paths
 
     generated_dir = tmp_path / "generated_workflows"
     generated_dir.mkdir()
+    # Both ``main.GENERATED_DIR`` and the services paths module are patched
+    # so future call sites that read either source see the redirected dir.
     monkeypatch.setattr(main_module, "GENERATED_DIR", str(generated_dir))
+    monkeypatch.setattr(services_paths, "GENERATED_DIR", str(generated_dir))
 
     script = generated_dir / "sample.py"
     script.write_text(
@@ -249,10 +253,12 @@ def test_validate_workflow_reports_tools_and_imports(client, tmp_path, monkeypat
 
 def test_validate_workflow_flags_syntax_errors(client, tmp_path, monkeypatch) -> None:
     import main as main_module
+    from workflowmvp.services import paths as services_paths
 
     generated_dir = tmp_path / "generated_workflows"
     generated_dir.mkdir()
     monkeypatch.setattr(main_module, "GENERATED_DIR", str(generated_dir))
+    monkeypatch.setattr(services_paths, "GENERATED_DIR", str(generated_dir))
 
     script = generated_dir / "broken.py"
     script.write_text("def broken(:\n    pass\n")
