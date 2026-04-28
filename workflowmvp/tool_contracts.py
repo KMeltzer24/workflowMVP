@@ -105,7 +105,38 @@ def _validate_scrape_webpage(code: str) -> Optional[str]:
             "Invalid scrape_webpage handling: scraped `result` is text. "
             "Do not call `materials.items()` without first parsing/structuring it."
         )
+    # ``list.extend(str)`` iterates characters — common bug after scrape_webpage.
+    if _uses_tool(code, "scrape_webpage") and re.search(
+        r"(?i)materials\.extend\(\s*[^)]*\.get\(\s*['\"]result['\"]",
+        code,
+    ):
+        return (
+            "Invalid scrape_webpage handling: do not `materials.extend(resp.get('result'))` — "
+            "scraped `result` is plain text; extend would iterate characters. "
+            "Build structured rows (e.g. `generate_text` + "
+            "`workflowmvp.json_llm.extract_first_json_value`, or parse fields) "
+            "then `append` dicts, and use `write_json` when the step names a `.json` file."
+        )
     return None
+
+
+def _validate_generate_text_json_via_helper_when_web(code: str) -> Optional[str]:
+    """LLM outputs need strip/fence tolerant parsing — not naive ``json.loads`` on ``result``."""
+    if not _uses_tool(code, "generate_text"):
+        return None
+    if not (_uses_tool(code, "scrape_webpage") or _uses_tool(code, "discover_urls")):
+        return None
+    if not re.search(r"\bjson\.loads\s*\(", code):
+        return None
+    if "extract_first_json_value" in code or "workflowmvp.json_llm" in code.replace(" ", ""):
+        return None
+    return (
+        "When `generate_text` emits JSON after `scrape_webpage` / `discover_urls`, do not "
+        "`json.loads(...)` raw `result` strings. Import "
+        "`from workflowmvp.json_llm import extract_first_json_value` "
+        "and parse with `extract_first_json_value(resp.get(\"result\") or \"\")`. "
+        "Use a large `max_tokens` (e.g. 4096) so JSON arrays are not truncated mid-stream."
+    )
 
 
 TOOL_CONTRACTS: dict[str, ToolContract] = {
@@ -177,19 +208,63 @@ TOOL_CONTRACTS: dict[str, ToolContract] = {
 }
 
 
-def relevant_contract_keys(actions: Iterable[str]) -> list[str]:
+def _step_descriptions_suggest_web_retrieval(descriptions: Iterable[str]) -> bool:
+    """True when natural-language steps imply URL discovery / scraping.
+
+    Rule-first parsing often leaves research steps as ``custom``; we still inject
+    ``discover_urls`` / ``scrape_webpage`` contracts so codegen sees response shapes.
+    """
+    for raw in descriptions:
+        d = (raw or "").lower()
+        if any(x in d for x in ("scrape", "sitemap", "webpage", "http://", "https://", "www.")):
+            return True
+        if any(x in d for x in ("discover url", "discover urls", "crawl")):
+            return True
+        if ("research" in d or "sources" in d or "retailer" in d) and any(
+            w in d
+            for w in (
+                "website",
+                "web ",
+                "web.",
+                " online",
+                "url",
+                "article",
+                "guide",
+                "project",
+                "woodworking",
+            )
+        ):
+            return True
+    return False
+
+
+def relevant_contract_keys(
+    actions: Iterable[str],
+    step_descriptions: Optional[Iterable[str]] = None,
+) -> list[str]:
     selected: list[str] = []
     seen: set[str] = set()
+    actions_set = set(actions)
     for name, contract in TOOL_CONTRACTS.items():
-        if contract.always_include or name in actions:
+        if contract.always_include or name in actions_set:
+            if name not in seen:
+                selected.append(name)
+                seen.add(name)
+    if step_descriptions is not None and _step_descriptions_suggest_web_retrieval(
+        step_descriptions
+    ):
+        for name in ("discover_urls", "scrape_webpage"):
             if name not in seen:
                 selected.append(name)
                 seen.add(name)
     return selected
 
 
-def build_contract_prompt_guidance(actions: Iterable[str]) -> str:
-    keys = relevant_contract_keys(actions)
+def build_contract_prompt_guidance(
+    actions: Iterable[str],
+    step_descriptions: Optional[Iterable[str]] = None,
+) -> str:
+    keys = relevant_contract_keys(actions, step_descriptions=step_descriptions)
     if not keys:
         return ""
     snippets = [TOOL_CONTRACTS[key].prompt_guidance for key in keys]
@@ -209,6 +284,10 @@ def build_retry_contract_guidance() -> str:
         "- Never substitute illustrative/placeholder research, fake \"sources\", or invented "
         "price tables for web research steps — use `discover_urls` + `scrape_webpage` "
         "(or `http_request`) and fail fast if retrieval fails."
+    )
+    lines.append(
+        "- If `generate_text` must return JSON lists/objects, parse via "
+        "`workflowmvp.json_llm.extract_first_json_value` (not bare `json.loads` on prose/fences)."
     )
     lines.append(
         "- Do not \"refuse\" web-research steps by writing stub JSON / status:failed payloads "
@@ -269,8 +348,7 @@ def _validate_research_refusal_without_web_tools(code: str) -> Optional[str]:
     research_hint = (
         "research" in lowered
         and (
-            "dresser_research" in lowered
-            or "_research.json" in lowered
+            "_research.json" in lowered
             or "materials_by_source" in lowered
             or "structured data extraction" in lowered
         )
@@ -310,9 +388,9 @@ def _validate_no_phony_materials_after_scrape(code: str) -> Optional[str]:
 
 
 def _validate_no_example_unit_pricing_in_research_workflow(code: str) -> Optional[str]:
-    """Reject 'example' unit prices in dresser/research BOM-style workflows."""
+    """Reject 'example' unit prices in *research.json-style BOM workflows."""
     lowered = code.lower()
-    if "dresser_research" not in lowered and "_research.json" not in lowered:
+    if "_research.json" not in lowered:
         return None
     if re.search(r"unit_price\s*=\s*[\d.]+\s*#\s*[Ee]xample", code) or re.search(
         r"#\s*[Ee]xample\s+unit\s+price", code
@@ -451,7 +529,6 @@ def _meta_report_prompt_error(text: str) -> Optional[str]:
     reportish = (
         "write a report" in lowered
         or "write report" in lowered
-        or "dresser_report" in lowered
         or "report.md" in lowered
     )
     if not reportish:
@@ -471,7 +548,7 @@ def _meta_report_prompt_error(text: str) -> Optional[str]:
     return (
         "generate_text report prompts must include pasted source excerpts or tool "
         "outputs (e.g. f-string with {combined_text[:12000]}). Do not use a meta-only "
-        "instruction that invents BOM/prices."
+        "instruction that invents facts or prices."
     )
 
 
@@ -506,3 +583,7 @@ def validate_tool_contracts(code: str) -> None:
     toy_p = _validate_no_example_unit_pricing_in_research_workflow(code)
     if toy_p:
         raise ValueError(toy_p)
+
+    json_loads_err = _validate_generate_text_json_via_helper_when_web(code)
+    if json_loads_err:
+        raise ValueError(json_loads_err)

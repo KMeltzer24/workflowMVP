@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import zipfile
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
 
+from workflowmvp.tool_contracts import build_contract_prompt_guidance, validate_tool_contracts
 from workflowmvp.tools import ToolRegistry
 
 
@@ -148,9 +150,12 @@ def test_download_uses_requests(registry: ToolRegistry, monkeypatch: pytest.Monk
         def raise_for_status(self) -> None:
             return None
 
-    def fake_get(url: str, timeout: int = 30, **_: object) -> FakeResponse:
+    def fake_get(url: str, timeout: object = 30, **_: object) -> FakeResponse:
         assert url.startswith("http")
-        assert timeout >= 1
+        if isinstance(timeout, tuple):
+            assert timeout[0] >= 1 and timeout[1] >= 1
+        else:
+            assert float(timeout) >= 1
         return FakeResponse()
 
     monkeypatch.setattr("workflowmvp.tools.requests.get", fake_get)
@@ -174,7 +179,7 @@ def test_download_retries_transient_failures(
         def raise_for_status(self) -> None:
             return None
 
-    def flaky_get(url: str, timeout: int = 30, **_: object):  # type: ignore[no-untyped-def]
+    def flaky_get(url: str, timeout: object = 30, **_: object):  # type: ignore[no-untyped-def]
         calls["count"] += 1
         if calls["count"] < 3:
             raise requests.RequestException("transient")
@@ -555,3 +560,74 @@ def test_discover_urls_expands_sitemap_index(registry: ToolRegistry) -> None:
     assert not any("other-host.example.com" in u for u in urls)
     # Same-origin homepage anchor still allowed.
     assert any(u.endswith("/about") for u in urls)
+
+
+def test_contract_guidance_includes_discover_when_custom_research_steps() -> None:
+    """Research-shaped ``custom`` steps still get URL/scrape response contracts."""
+    text = build_contract_prompt_guidance(
+        {"custom", "generate_text"},
+        step_descriptions=[
+            "Research dresser plans from reputable woodworking websites and collect sources.",
+            "Write summary.md",
+        ],
+    )
+    assert "discover_urls response contract" in text
+    assert "scrape_webpage response contract" in text
+
+
+def test_validate_rejects_materials_extend_scrape_result() -> None:
+    bad = '''
+tools = ToolRegistry()
+scrape_webpage_tool = tools.get_tool("scrape_webpage")
+materials = []
+r = scrape_webpage_tool.function(url="https://example.org/")
+materials.extend(r.get("result"))
+'''
+    with pytest.raises(ValueError, match=r"materials\.extend"):
+        validate_tool_contracts(bad)
+
+
+def test_request_with_retry_uses_short_connect_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Avoid hanging ~30s×N on TCP connect; refuse/DNS-style errors skip extra tries."""
+    seen: list[Any] = []
+
+    def fake_get(url, timeout=None, headers=None):
+        seen.append(timeout)
+        raise requests.ConnectionError(
+            "HTTPSConnectionPool(host='x', port=443): Max retries exceeded with url: / "
+            '(Caused by NewConnectionError("<…>: Failed to establish a new connection: '
+            '[Errno 61] Connection refused"))'
+        )
+
+    monkeypatch.setattr("workflowmvp.tools._base.requests.get", fake_get)
+    monkeypatch.setattr("workflowmvp.tools._base.time.sleep", lambda *a, **k: None)
+
+    with pytest.raises(RuntimeError, match="after 1 attempt"):
+        ToolRegistry._request_with_retry("https://example.com/x", timeout=30, attempts=3)
+
+    assert len(seen) == 1
+    connect, read = seen[0]
+    assert read == 30.0
+    assert connect == min(8.0, 30.0)
+
+
+def test_request_with_retry_still_retries_transient_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    n = 0
+
+    def fake_get(url, timeout=None, headers=None):
+        nonlocal n
+        n += 1
+        if n < 2:
+            raise requests.ReadTimeout("stall")
+        resp = MagicMock()
+        resp.raise_for_status = lambda: None
+        return resp
+
+    monkeypatch.setattr("workflowmvp.tools._base.requests.get", fake_get)
+    monkeypatch.setattr("workflowmvp.tools._base.time.sleep", lambda *a, **k: None)
+    ToolRegistry._request_with_retry("https://example.com/", timeout=30, attempts=3)
+    assert n == 2

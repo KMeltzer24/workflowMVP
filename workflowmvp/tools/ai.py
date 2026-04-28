@@ -23,7 +23,7 @@ class AIToolsMixin:
         self.register_tool(Tool(
             name="generate_text",
             description=(
-                "Generate text using the configured AI model (Gemini / Groq / OpenRouter). "
+                "Generate text using Google Gemini (same stack as codegen). "
                 "Use for writing, summarising, translating, classifying, formatting data as prose, "
                 "or any task that requires language understanding. "
                 "Pass the full instruction in 'prompt'; the model returns plain text."

@@ -710,6 +710,36 @@ button.ghost:hover {
     }
 }
 
+/* Code generation progress */
+
+.generate-status {
+    margin-top: 10px;
+    font-size: 0.95rem;
+    color: var(--text-muted);
+    min-height: 1.35em;
+}
+
+.generate-status.is-active {
+    color: var(--primary);
+    font-weight: 500;
+}
+
+.generate-status.is-active::before {
+    content: "";
+    display: inline-block;
+    width: 0.55em;
+    height: 0.55em;
+    margin-right: 0.45em;
+    border-radius: 50%;
+    background: var(--primary);
+    animation: generate-pulse 1s ease-in-out infinite;
+}
+
+@keyframes generate-pulse {
+    0%, 100% { opacity: 0.35; transform: scale(0.92); }
+    50% { opacity: 1; transform: scale(1); }
+}
+
 /* Video */
 
 #videoPreview {
@@ -749,4 +779,24 @@ video {
     #toolCategorySelect {
         flex: 1 1 auto;
     }
+}
+
+/* Homepage intro strip (portfolio blurb above tab panels) */
+
+.site-intro {
+    background: var(--surface-alt);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 18px;
+    font-size: 0.94rem;
+    line-height: 1.58;
+}
+
+.site-intro strong {
+    color: var(--text);
+}
+
+.site-intro p {
+    margin: 0;
+    color: var(--text-muted);
 }

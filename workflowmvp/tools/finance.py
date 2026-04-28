@@ -13,7 +13,8 @@ class FinanceToolsMixin:
             name="fetch_stock_price",
             description=(
                 "Fetch the current or recent price of a stock or index using its ticker symbol "
-                "(e.g. ^GSPC for S&P 500, AAPL for Apple). Returns price, currency, and metadata."
+                "(e.g. ^GSPC for S&P 500 index level in points, SPY for the ETF, AAPL for Apple). "
+                "Returns price, currency, and metadata."
             ),
             function=self._fetch_stock_price,
             parameters={

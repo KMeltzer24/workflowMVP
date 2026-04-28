@@ -11,20 +11,39 @@ def test_tools_endpoint(client) -> None:
     payload = response.get_json()
     assert isinstance(payload, list)
     names = {tool["name"] for tool in payload}
-    assert {
-        "download",
-        "read_file",
-        "write_file",
-        "send_email",
-        "read_json",
-        "write_json",
+    assert len(payload) == len(names) == 29
+    expected = {
         "append_file",
-        "hash_file",
+        "compress_files",
+        "copy_file",
+        "create_directory",
+        "delete_file",
+        "discover_urls",
+        "download",
+        "extract_archive",
+        "fetch_stock_price",
+        "generate_text",
         "get_current_time",
+        "hash_file",
+        "http_request",
+        "list_files",
+        "move_file",
+        "read_csv",
+        "read_file",
+        "read_json",
         "read_pdf",
         "render_template",
-        "fetch_stock_price",
-    }.issubset(names)
+        "scrape_webpage",
+        "send_email",
+        "send_notification",
+        "sqlite_insert",
+        "sqlite_query",
+        "wait",
+        "write_csv",
+        "write_file",
+        "write_json",
+    }
+    assert names == expected
 
 
 def test_examples_endpoint_exposes_requirements(client) -> None:
@@ -37,7 +56,7 @@ def test_examples_endpoint_exposes_requirements(client) -> None:
         assert {"name", "description", "workflow"}.issubset(example.keys())
     email_example = next(e for e in examples if "Email" in e["name"])
     assert "EMAIL_USER" in email_example["requires_credentials"]
-
+    assert len(examples) >= 10
 
 def test_parse_workflow_endpoint(client) -> None:
     response = client.post(
@@ -142,21 +161,18 @@ def test_run_workflow_missing_file_returns_error(client) -> None:
 
 
 # ---------------------------------------------------------------------------
-# ACTION_REQUIREMENTS provider-aware resolution for generate_text
+# ACTION_REQUIREMENTS resolution for ``generate_text`` (Gemini)
 # ---------------------------------------------------------------------------
 
 
 def _clear_llm_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in (
-        "LLM_PROVIDER",
         "GEMINI_API_KEY",
-        "GROQ_API_KEY",
-        "OPENROUTER_API_KEY",
     ):
         monkeypatch.delenv(key, raising=False)
 
 
-def test_check_requirements_generate_text_gemini_default(
+def test_check_requirements_generate_text_requires_gemini(
     client, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _clear_llm_env(monkeypatch)
@@ -177,10 +193,11 @@ def test_check_requirements_generate_text_gemini_default(
     assert data["missing"] == ["GEMINI_API_KEY"]
 
 
-def test_check_requirements_generate_text_groq_provider(
+def test_check_requirements_generate_text_satisfied_with_gemini_key(
     client, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _clear_llm_env(monkeypatch)
+    monkeypatch.setenv("GEMINI_API_KEY", "present")
     steps = [
         {
             "step_id": "step_1",
@@ -192,11 +209,11 @@ def test_check_requirements_generate_text_groq_provider(
     ]
     response = client.post(
         "/api/check-requirements",
-        json={"steps": steps, "credentials": {"LLM_PROVIDER": "groq"}},
+        json={"steps": steps, "credentials": {}},
     )
     data = response.get_json()
     assert data["success"] is True
-    assert data["missing"] == ["GROQ_API_KEY"]
+    assert data["missing"] == []
 
 
 def test_validate_workflow_rejects_out_of_tree_path(client, tmp_path) -> None:
@@ -273,29 +290,3 @@ def test_validate_workflow_flags_syntax_errors(client, tmp_path, monkeypatch) ->
     assert payload["syntax_error"] is not None
 
 
-def test_check_requirements_generate_text_openrouter_provider(
-    client, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _clear_llm_env(monkeypatch)
-    steps = [
-        {
-            "step_id": "step_1",
-            "description": "Write a haiku",
-            "action": "generate_text",
-            "parameters": {},
-            "dependencies": [],
-        }
-    ]
-    response = client.post(
-        "/api/check-requirements",
-        json={
-            "steps": steps,
-            "credentials": {
-                "LLM_PROVIDER": "openrouter",
-                "OPENROUTER_API_KEY": "sk-or-test",
-            },
-        },
-    )
-    data = response.get_json()
-    assert data["success"] is True
-    assert data["missing"] == []

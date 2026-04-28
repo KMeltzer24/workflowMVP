@@ -29,6 +29,39 @@ warnings.filterwarnings(
 
 import requests  # noqa: E402
 
+# ``requests`` applies a single float to *both* connect and read timeouts. For hosts that
+# blackhole TCP (no RST), connect can burn the full budget per attempt × retries (~90s for
+# ``timeout=30``, ``attempts=3``). Use a short connect phase by default; override via env.
+_HTTP_CONNECT_TIMEOUT = float(os.getenv("WORKFLOW_HTTP_CONNECT_TIMEOUT", "8"))
+
+TimeoutLike = int | float | tuple[float, float]
+
+
+def _http_timeout_pair(timeout: TimeoutLike) -> tuple[float, float]:
+    """Return ``(connect, read)`` timeouts for ``requests``."""
+    if isinstance(timeout, tuple):
+        if len(timeout) != 2:
+            raise ValueError("timeout tuple must be (connect, read)")
+        c, r = float(timeout[0]), float(timeout[1])
+    else:
+        r = float(timeout)
+        c = min(_HTTP_CONNECT_TIMEOUT, r)
+    if c <= 0 or r <= 0:
+        raise ValueError("HTTP timeouts must be positive")
+    return (c, r)
+
+
+def _http_error_unlikely_to_recover(exc: BaseException) -> bool:
+    """True when repeating the same GET is unlikely to help (fail fast, no backoff wait)."""
+    msg = str(exc).lower()
+    return (
+        "connection refused" in msg
+        or "errno 61" in msg
+        or "name or service not known" in msg
+        or "nodename nor servname" in msg
+        or "failed to resolve" in msg
+    )
+
 
 @dataclass
 class Tool:
@@ -148,25 +181,30 @@ class _BaseToolRegistry:
     def _request_with_retry(
         cls,
         url: str,
-        timeout: int = 30,
+        timeout: TimeoutLike = 30,
         attempts: int = 3,
         base_backoff: float = 0.4,
         headers: Optional[Dict[str, str]] = None,
     ) -> requests.Response:
         """GET ``url`` with exponential backoff for transient request failures."""
         merged_headers = {**cls._BROWSER_HEADERS, **(headers or {})}
+        timeout_pair = _http_timeout_pair(timeout)
         last_exc: Optional[Exception] = None
         for attempt in range(1, attempts + 1):
             try:
-                response = requests.get(url, timeout=timeout, headers=merged_headers)
+                response = requests.get(
+                    url, timeout=timeout_pair, headers=merged_headers
+                )
                 response.raise_for_status()
                 return response
             except requests.RequestException as exc:
                 last_exc = exc
-                if attempt == attempts:
+                if attempt == attempts or _http_error_unlikely_to_recover(exc):
                     break
                 time.sleep(base_backoff * (2 ** (attempt - 1)))
-        raise RuntimeError(f"Request failed after {attempts} attempts: {last_exc}")
+        tried = attempt  # loop always assigns on last iteration
+        att_word = "attempt" if tried == 1 else "attempts"
+        raise RuntimeError(f"Request failed after {tried} {att_word}: {last_exc}")
 
     def _sandbox_path(self, raw_path: str) -> str:
         """Resolve a user-supplied path and enforce the run sandbox boundary."""

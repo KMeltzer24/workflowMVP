@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "workflowmvp"
 version = "0.2.0"
-description = "Turn screen-capture videos or text descriptions into executable Python workflows using Google's Gemini AI."
+description = "Turn screen recordings or prose into executable Python workflows (Flask UI; Google Gemini codegen over a constrained tool registry)."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }

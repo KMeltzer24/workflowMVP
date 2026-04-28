@@ -60,10 +60,9 @@ from workflowmvp.parser import WorkflowParser, WorkflowStep  # noqa: E402
 from workflowmvp.services.cleanup import cleanup_files as _services_cleanup_files  # noqa: E402
 from workflowmvp.services.credentials import (  # noqa: E402
     creds_from_form_or_json,
-    missing_llm_key,
-    resolve_api_key,
-    resolve_llm_model,
-    resolve_llm_provider,
+    missing_gemini_api_key_hint,
+    resolve_gemini_api_key,
+    resolve_gemini_model,
     sanitize_credentials,
 )
 from workflowmvp.services.examples import (  # noqa: E402
@@ -267,9 +266,8 @@ def parse_workflow():
         payload = request.get_json(silent=True) or {}
         workflow_text = payload.get("workflow_text", "")
         creds = sanitize_credentials(payload.get("credentials"))
-        provider = resolve_llm_provider(creds)
-        model = resolve_llm_model(provider, creds)
-        api_key = resolve_api_key(provider, creds)
+        api_key = resolve_gemini_api_key(creds)
+        model = resolve_gemini_model(creds)
         parser = WorkflowParser()
         steps = parser.parse_workflow(workflow_text)
         confidence = parser.assess_parse_confidence(steps)
@@ -278,7 +276,7 @@ def parse_workflow():
         ai_assist_error: Optional[str] = None
         if api_key and confidence.get("needs_ai_assist"):
             try:
-                ai_agent = WorkflowAgent(api_key=api_key, provider=provider, model=model)
+                ai_agent = WorkflowAgent(api_key=api_key, model=model)
                 improved = ai_agent.improve_parsed_steps(workflow_text, steps)
                 if improved:
                     steps = improved
@@ -350,16 +348,7 @@ def parse_video():
         creds = sanitize_credentials(
             creds_from_form_or_json(request.form.get("credentials"))
         )
-        provider = resolve_llm_provider(creds)
-        if provider != "gemini":
-            return jsonify(
-                {
-                    "success": False,
-                    "error": "Video parsing currently supports provider=gemini only.",
-                    "missing_requirements": ["GEMINI_API_KEY"],
-                }
-            )
-        api_key = resolve_api_key("gemini", creds)
+        api_key = resolve_gemini_api_key(creds)
         if not api_key:
             return jsonify(
                 {
@@ -425,12 +414,9 @@ def generate_workflow():
         steps_data = payload.get("steps", [])
         workflow_name = _safe_name(payload.get("name", "generated_workflow"))
         creds = sanitize_credentials(payload.get("credentials"))
-        provider = resolve_llm_provider(creds)
-        model = resolve_llm_model(provider, creds)
-
-        api_key = resolve_api_key(provider, creds)
+        api_key = resolve_gemini_api_key(creds)
         if not api_key:
-            missing_key = missing_llm_key(provider)
+            missing_key = missing_gemini_api_key_hint()
             return jsonify(
                 {
                     "success": False,
@@ -438,6 +424,8 @@ def generate_workflow():
                     "missing_requirements": [missing_key],
                 }
             )
+
+        model = resolve_gemini_model(creds)
 
         steps = [
             WorkflowStep(
@@ -455,14 +443,17 @@ def generate_workflow():
         output_path = os.path.join(
             GENERATED_DIR, f"{workflow_name}_{timestamp}.py"
         )
-        agent = WorkflowAgent(api_key=api_key, provider=provider, model=model)
+        t_gen0 = time.monotonic()
+        agent = WorkflowAgent(api_key=api_key, model=model)
         agent.generate_workflow_code(steps, output_path)
+        generation_seconds = round(time.monotonic() - t_gen0, 3)
 
         return jsonify(
             {
                 "success": True,
                 "output_path": os.path.relpath(output_path, PROJECT_ROOT),
                 "message": "Workflow generated successfully",
+                "generation_seconds": generation_seconds,
             }
         )
     except Exception as exc:

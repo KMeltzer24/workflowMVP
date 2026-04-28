@@ -1,12 +1,14 @@
 """
-AI Agent - Generates executable Python code from workflow steps.
-Supports Gemini, Groq, and OpenRouter as LLM backends.
+AI Agent — Generates executable Python code from parsed workflow steps.
+
+Code generation uses **Google Gemini** via :mod:`workflowmvp.llm`.
 """
 
 import json
 import re
 from typing import Dict, List, Optional, Tuple
 
+from .json_llm import extract_first_json_value
 from .llm import LLMClient, required_api_key_name
 from .parser import WorkflowStep
 from .tool_contracts import (
@@ -103,6 +105,9 @@ _TOOL_GUIDANCE: Dict[str, str] = {
         "(list of relative file paths or one string path). Files are sent as real MIME attachments. "
         "You may use a short body like \"See attached.\" when attaching. Without attachments, body "
         "carries the full message. Never invent email_from — omit it or use os.getenv('EMAIL_FROM').\n"
+        "   **No boilerplate signature:** Do **not** add \"Best regards\", \"Sincerely\", \"Your Python Script\", "
+        "\"Your Automation Assistant\", or similar sign-offs unless the workflow step text **explicitly** asks for them. "
+        "Body = what the steps ask for, not extra closings.\n"
         "   **Recipient:** use the address **exactly** as written in the send-email step (same spelling "
         "and digits, e.g. `kevinmeltzer1@gmail.com` vs `kevinnmeltzer@gmail.com`). Do not substitute a "
         "different address.\n"
@@ -110,17 +115,25 @@ _TOOL_GUIDANCE: Dict[str, str] = {
         "   email_tool.function(recipient='you@example.com', subject='...', body='...', attachments=['report.md'])"
     ),
     "generate_text": (
-        "AI TEXT GENERATION — for summarising, translating, or **creative** tasks when the step allows it:\n"
+        "AI TEXT GENERATION — plain text, summaries, or structured JSON embedded in prose:\n"
         "   gen = tools.get_tool('generate_text')\n"
         "   r = gen.function(prompt=\"Write a short poem about SPY closing at $582.10\")\n"
         "   text = r.get('result', '') if r.get('success') else ''\n"
-        "   For **research summaries and markdown reports**, build `prompt` as an **f-string** (or concat) "
-        "that **embeds** scraped/API text (slice to a sane size). Meta-only instructions like "
-        "\"write a comprehensive report\" **without** pasted source excerpts cause fabricated facts — "
-        "avoid that pattern. If extraction yields **no** substantive text/JSON, **stop** before "
-        "`generate_text` / `send_email` with a clear log.\n"
-        "   For **reminders, paragraphs, and email bodies**, pass a large enough **max_tokens** "
-        "(typically **512–1024**, not ~200) so the model is not cut off mid-sentence."
+        "**JSON from the model (after scrape / research):** responses often include explanation lines and "
+        "markdown fenced blocks. **Never** apply json.loads(...) alone to the raw result string.\n"
+        "   from workflowmvp.json_llm import extract_first_json_value\n"
+        "   blob = extract_first_json_value(r.get('result') or '')\n"
+        "   # blob is dict | list | None — validate type before use.\n"
+        "Use max_tokens large enough for the payload (often 2048–8192 when emitting big arrays or cut "
+        "lists; small budgets truncate mid-JSON).\n"
+        "   For research summaries and markdown reports, build prompt as an f-string or concat that "
+        "embeds scraped/API text (slice to a sane size). Meta-only instructions without excerpts "
+        "cause fabricated facts — avoid that.\n"
+        "   For creative or fixed-form text, carry form and length from the step description into the "
+        "prompt and use enough max_tokens (typically 512–4096) so output is not truncated mid-line.\n"
+        "**Never** fabricate illustrative BOM rows, example.com sources, or placeholder research.json "
+        "when web tools fail — log and **return** before reports/email.\n"
+        "For email bodies alone, ~512–1024 tokens usually suffices unless the steps require long prose.\n"
     ),
     "scrape_webpage": (
         "SCRAPING — scrape_webpage strips HTML tags and returns clean readable text (up to 4000 chars).\n"
@@ -410,22 +423,26 @@ Rule-parser draft (for reference):
 
     @staticmethod
     def _extract_json_array(text: str) -> List[dict]:
-        """Pull a JSON array out of raw model output, tolerating markdown fences."""
+        """Pull a JSON array out of raw model output, tolerating prose and fenced JSON."""
+        parsed = extract_first_json_value(text)
+        if isinstance(parsed, list):
+            return parsed
+
         stripped = re.sub(r"^```[a-zA-Z]*\n?", "", text.strip())
         stripped = re.sub(r"\n?```$", "", stripped)
         try:
-            parsed = json.loads(stripped)
-            if isinstance(parsed, list):
-                return parsed
+            retry = json.loads(stripped)
+            if isinstance(retry, list):
+                return retry
         except json.JSONDecodeError:
             pass
         match = re.search(r"\[[\s\S]*\]", stripped)
         if not match:
             raise ValueError("AI parse assistant returned invalid JSON.")
-        parsed = json.loads(match.group(0))
-        if not isinstance(parsed, list):
+        outer = json.loads(match.group(0))
+        if not isinstance(outer, list):
             raise ValueError("AI parse assistant returned non-list JSON.")
-        return parsed
+        return outer
 
     # ------------------------------------------------------------------
     # Prompt construction
@@ -434,9 +451,8 @@ Rule-parser draft (for reference):
     def _build_grouped_tool_listing(self) -> str:
         """Group the available-tools listing by category for readability.
 
-        The LLM still sees every tool, but the list is organised so smaller
-        models stay on-task and bigger models waste fewer tokens scanning a
-        flat block of 30 entries.
+        The LLM still sees every tool; grouping keeps scanning cost lower than
+        a single flat alphabetical list.
         """
         by_category: Dict[str, List[str]] = {}
         for tool in self.tool_registry.list_tools():
@@ -491,7 +507,8 @@ Rule-parser draft (for reference):
     def _build_tool_contract_guidance(self, steps: List[WorkflowStep]) -> str:
         """Inline response-shape contracts for tools likely to be used."""
         actions = {step.action for step in steps if step.action}
-        return build_contract_prompt_guidance(actions)
+        descriptions = (step.description for step in steps)
+        return build_contract_prompt_guidance(actions, step_descriptions=descriptions)
 
     def _create_system_prompt(self, steps: Optional[List[WorkflowStep]] = None) -> str:
         steps = steps or []
@@ -539,6 +556,8 @@ Always use RELATIVE file paths ("report.txt", "data/output.csv"). Never hardcode
 
 **Imports:** Use the Python **standard library** (`datetime`, **`zoneinfo`**) plus packages **already in** project requirements (e.g. `yfinance` when needed). **Do not import `pytz` or `holidays`** — they are not dependencies. **Do not `import requests` or `bs4`** — use `http_request` / `scrape_webpage` / `discover_urls` via `ToolRegistry`. For IANA timezones use `zoneinfo.ZoneInfo`. For a **nominal** NYSE/Nasdaq regular cash session close, **16:00 America/New_York on weekdays (Mon–Fri)** is acceptable unless steps say otherwise; **market holidays and early closes are not modeled** unless you use an external API or explicit rules in the step text.
 
+**Structured JSON from `generate_text`:** If you ask the model to emit JSON (BOMs, lists, key/value extraction), add `from workflowmvp.json_llm import extract_first_json_value` and parse with `extract_first_json_value(response.get('result') or '')`. Do **not** pass raw `result` strings to `json.loads` alone — models prepend prose and markdown fences.
+
 ## TOOL USAGE
 
 Get tools like this — always use get_tool(), never use get():
@@ -549,6 +568,8 @@ Get tools like this — always use get_tool(), never use get():
 Every tool call returns a dict that (after wrapping) always includes: success, error, result, and meta (use meta['tool'] for logging).
 On failure: success is False — read error and stop.
 On success: read result for the primary string/object output when set. Many tools also set extra keys on the same dict (e.g. read_json → data, fetch_stock_price → price/ticker/currency, read_pdf → text, render_template → rendered). Use those fields when documented for that tool.
+
+When a step names a concrete output file (e.g. `report.md`, `data_research.json`), **write it** with `write_file` or `write_json`. `generate_text` only returns a string — it does not create files unless you save that string.
 
    if not result.get('success'):
        logger.error(f"Failed: {{result.get('error')}}")
@@ -574,11 +595,13 @@ Do not treat `custom` as "log and skip". Try to implement the user intent using 
 - For research/discovery steps: use `discover_urls` + `scrape_webpage` / `http_request`.
 - For calculations: compute from retrieved data and explicit step parameters.
 
-**Web research:** Never fabricate `research.json`-style payloads, "illustrative sources", or hardcoded retail **price tables** as a substitute for fetching pages. If the step lacks a URL, run `discover_urls` from a reasonable official `start_url` (user- or step-supplied); only then scrape. If discovery/scraping yields nothing useful, **stop** — do not fill JSON with placeholder materials to "unblock" later steps. Never use **google.com / bing.com** as `discover_urls` start_url — use real project/publisher sites or URLs from the step text.
+**Web research:** Never fabricate `research.json`-style payloads, "illustrative sources", or hardcoded retail **price tables** as a substitute for fetching pages. If the step lacks a URL, run `discover_urls` from a reasonable official `start_url` (user- or step-supplied); only then scrape. Prefer URLs whose paths match the topic (e.g. "dresser" in the slug for dresser plans); generic project hub pages rarely contain cut lists — request enough `max_results`, then filter ranking if needed. If discovery/scraping yields nothing useful, **stop** — do not fill JSON with placeholder materials or **example.com** demo rows to "unblock" later steps. Never use **google.com / bing.com** as `discover_urls` start_url — use real project/publisher sites or URLs from the step text.
 
 **Do not “compliance cop out”:** Writing a JSON blob that only says automation failed, then `generate_text` + `send_email` anyway, is wrong. Either deliver **real retrieved content** or **exit early** with logs — no stub research files, no “limitations” attachment run.
 
 If required inputs are truly missing (e.g. no dimensions/prices/source data), **fail fast** with a clear `logger.error(...)` and `return` before any side-effecting step (especially `send_email`). Do not send placeholder "no data generated" completion emails.
+
+**Email bodies:** Keep them minimal. Do **not** append sign-offs such as "Best regards" or fictional sender names ("Your Python Script") unless the user’s step text explicitly requests a closing.
 
 ## LOGGING
 

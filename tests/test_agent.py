@@ -205,6 +205,33 @@ def test_generate_workflow_code_raises_on_empty_model_output(
             agent.generate_workflow_code(steps, output_file=str(output))
 
 
+def test_validate_generated_python_rejects_naive_json_loads_after_scrape_and_generate_text() -> None:
+    bad = """
+import json
+from workflowmvp.tools import ToolRegistry
+tools = ToolRegistry()
+tools.get_tool("scrape_webpage").function(url="https://example.org/")
+g = tools.get_tool("generate_text")
+r = g.function(prompt="x", max_tokens=100)
+data = json.loads(r.get("result") or "{}")
+""".strip()
+    with pytest.raises(ValueError, match="extract_first_json_value"):
+        WorkflowAgent._validate_generated_python(bad)
+
+
+def test_validate_generated_python_allows_json_llm_after_scrape_and_generate_text() -> None:
+    ok = """
+from workflowmvp.tools import ToolRegistry
+from workflowmvp.json_llm import extract_first_json_value
+tools = ToolRegistry()
+tools.get_tool("scrape_webpage").function(url="https://example.org/")
+g = tools.get_tool("generate_text")
+r = g.function(prompt="x", max_tokens=100)
+data = extract_first_json_value(r.get("result") or "")
+""".strip()
+    WorkflowAgent._validate_generated_python(ok)
+
+
 def test_validate_generated_python_rejects_unsafe_http_request_json_loads() -> None:
     bad = """
 import json

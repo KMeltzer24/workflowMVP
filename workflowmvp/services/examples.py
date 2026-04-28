@@ -7,24 +7,17 @@ from collections.abc import Iterable
 from typing import Any, Callable, Dict, List
 
 # Mapping of workflow actions -> env var keys they require. Used by
-# /api/check-requirements to tell the UI which creds are missing before a
-# run.
+# /api/check-requirements to tell the UI which creds are missing before a run.
 #
 # Values can be either:
 #   - a static list of env var names, or
 #   - a callable ``(effective_env: Mapping[str, str]) -> List[str]`` for
-#     provider-aware resolution (e.g. generate_text picks its key based on
-#     ``LLM_PROVIDER``).
+#     contextual resolution when needed later.
 ActionRequirement = List[str] | Callable[[Dict[str, str]], List[str]]
 
 
-def _generate_text_requirements(effective: Dict[str, str]) -> List[str]:
-    """Which key ``generate_text`` needs depends on the configured provider."""
-    provider = (effective.get("LLM_PROVIDER") or "gemini").strip().lower()
-    if provider == "groq":
-        return ["GROQ_API_KEY"]
-    if provider == "openrouter":
-        return ["OPENROUTER_API_KEY"]
+def _generate_text_requirements(_effective: Dict[str, str]) -> List[str]:
+    """``generate_text`` uses :class:`~workflowmvp.llm.LLMClient` (Gemini only)."""
     return ["GEMINI_API_KEY"]
 
 
@@ -151,6 +144,45 @@ def list_examples() -> List[Dict[str, Any]]:
                 "2. Write a concise 3-sentence summary of the page content\n"
                 "3. Write the summary to file \"summary.txt\"\n"
                 "4. Send notification with title \"Summary\" and message \"Done\""
+            ),
+            "requires_credentials": [],
+        },
+        {
+            "name": "SQLite mini database",
+            "description": "Create a SQLite file, insert two rows, COUNT(*), save the tally.",
+            "workflow": (
+                "1. Create a directory \"sqlite_demo\"\n"
+                "2. sqlite_query on database \"sqlite_demo/demo.db\" with query "
+                "\"CREATE TABLE IF NOT EXISTS pets (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)\"\n"
+                "3. sqlite_insert into database \"sqlite_demo/demo.db\" table pets with data "
+                "[{\"name\": \"Ada\"}, {\"name\": \"Grace\"}]\n"
+                "4. sqlite_query database \"sqlite_demo/demo.db\" with query \"SELECT COUNT(*) AS n FROM pets\"\n"
+                "5. Write a one-line summary of the query result to \"sqlite_demo/pet_count.txt\"\n"
+                "6. Send notification with title \"SQLite\" and message \"Pet tally saved\""
+            ),
+            "requires_credentials": [],
+        },
+        {
+            "name": "HTTP HEAD probe",
+            "description": "HEAD a small public endpoint and append status + ISO time to a log file.",
+            "workflow": (
+                "1. get_current_time in timezone UTC and note the ISO timestamp\n"
+                "2. http_request URL \"https://httpbin.org/status/200\" with method HEAD\n"
+                "3. Append a line containing the ISO timestamp and HTTP status_code to \"http_probe.log\"\n"
+                "4. Send notification with title \"Probe\" and message \"HTTP probe logged\""
+            ),
+            "requires_credentials": [],
+        },
+        {
+            "name": "Discover + scrape (python.org)",
+            "description": "Rank URLs on python.org then scrape the homepage into a snippet file.",
+            "workflow": (
+                "1. discover_urls with start_url \"https://www.python.org/\", max_results 12, "
+                "keywords docs download\n"
+                "2. Write the top URLs (url + score lines) to \"python_org_discovery.txt\"\n"
+                "3. scrape_webpage URL \"https://www.python.org/\" and save the scraped text excerpt "
+                "(first chunk) to \"python_org_home.txt\"\n"
+                "4. Send notification with title \"Discover\" and message \"Discovery scratch files saved\""
             ),
             "requires_credentials": [],
         },

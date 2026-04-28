@@ -1,58 +1,50 @@
-"""Unified LLM client.
+"""Google Gemini client for text generation.
 
-Wraps Gemini, Groq, and OpenRouter behind a single `generate_text` method so
-`workflowmvp.agent` and the `generate_text` tool in `workflowmvp.tools` don't
-have to duplicate provider routing logic.
-
-Design goals:
-  - Zero magic: the caller decides temperature + token budget.
-  - Lazy: Gemini client is only constructed if/when needed.
-  - Honest failures: raise on misconfiguration, return '' only when the model
-    itself returned empty content.
+Used by :class:`workflowmvp.agent.WorkflowAgent` and the ``generate_text`` tool
+(:mod:`workflowmvp.tools.ai`).
 """
 
 from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Dict, Optional
+from typing import Any
 
-import requests
-
-SUPPORTED_PROVIDERS = ("gemini", "groq", "openrouter")
-
-DEFAULT_MODELS = {
-    "gemini": "gemini-2.5-flash",
-    "groq": "llama-3.3-70b-versatile",
-    "openrouter": "meta-llama/llama-3.1-70b-instruct",
-}
-
-MODEL_ENV_KEYS = {
-    "gemini": "GEMINI_MODEL",
-    "groq": "GROQ_MODEL",
-    "openrouter": "OPENROUTER_MODEL",
-}
-
-API_KEY_ENV_KEYS = {
-    "gemini": "GEMINI_API_KEY",
-    "groq": "GROQ_API_KEY",
-    "openrouter": "OPENROUTER_API_KEY",
-}
-
-# OpenAI-compatible chat endpoints for providers that are not Gemini.
-CHAT_COMPLETION_URLS = {
-    "groq": "https://api.groq.com/openai/v1/chat/completions",
-    "openrouter": "https://openrouter.ai/api/v1/chat/completions",
-}
+DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 
 
-def required_api_key_name(provider: str) -> str:
-    """Return the env var name that holds the API key for `provider`."""
-    return API_KEY_ENV_KEYS.get(provider, "GEMINI_API_KEY")
+def gemini_response_to_text(response: Any) -> str:
+    """Extract plain text from a ``google.genai`` ``generate_content`` response.
+
+    Concatenates ``candidates[].content.parts[].text`` when present — ``response.text``
+    alone can be incomplete on multi-part completions. Matches :class:`LLMClient` behavior.
+    """
+    chunks: list[str] = []
+    raw_candidates = getattr(response, "candidates", None)
+    candidates: tuple[Any, ...] = ()
+    if isinstance(raw_candidates, (list, tuple)):
+        candidates = tuple(raw_candidates)
+    for cand in candidates:
+        content = getattr(cand, "content", None)
+        parts = getattr(content, "parts", None) if content is not None else None
+        if not parts:
+            continue
+        for part in parts:
+            fragment = getattr(part, "text", None)
+            if fragment:
+                chunks.append(fragment)
+    if chunks:
+        return "\n".join(chunks).strip()
+    direct = getattr(response, "text", None)
+    return (direct or "").strip()
+
+
+def required_api_key_name(_provider: str | None = None) -> str:
+    """Env var that holds the Gemini API key."""
+    return "GEMINI_API_KEY"
 
 
 def _suppress_noisy_client_loggers() -> None:
-    """Keep httpx / Google GenAI SDK traffic on WARNING so INFO logs stay readable."""
     for name in (
         "httpx",
         "httpcore",
@@ -64,34 +56,23 @@ def _suppress_noisy_client_loggers() -> None:
 
 
 class LLMClient:
-    """Provider-agnostic text generation.
-
-    Instantiate once and call `generate_text(prompt, max_tokens, temperature)`.
-    Raises ValueError on misconfiguration (unknown provider, missing key).
-    """
+    """Gemini-backed text generation via ``generate_text``."""
 
     def __init__(
         self,
-        provider: Optional[str] = None,
-        api_key: Optional[str] = None,
-        model: Optional[str] = None,
+        provider: str | None = None,
+        api_key: str | None = None,
+        model: str | None = None,
     ) -> None:
-        resolved_provider = (provider or os.getenv("LLM_PROVIDER", "gemini")).strip().lower()
-        if resolved_provider not in SUPPORTED_PROVIDERS:
-            raise ValueError(
-                f"Unsupported provider '{resolved_provider}'. "
-                f"Choose from: {', '.join(SUPPORTED_PROVIDERS)}."
-            )
-        self.provider = resolved_provider
-        self.api_key = api_key or os.getenv(API_KEY_ENV_KEYS[self.provider])
+        _ = provider  # historical signature — only Gemini is supported
+        self.provider = "gemini"
+        self.api_key = api_key or os.getenv("GEMINI_API_KEY")
         self.model = (
             model
-            or os.getenv(MODEL_ENV_KEYS[self.provider])
-            or DEFAULT_MODELS[self.provider]
+            or os.getenv("GEMINI_MODEL")
+            or DEFAULT_GEMINI_MODEL
         )
         self._gemini_client: Any = None
-
-    # -- public --------------------------------------------------------------
 
     def is_configured(self) -> bool:
         return bool(self.api_key)
@@ -99,8 +80,8 @@ class LLMClient:
     def require_configured(self) -> None:
         if not self.is_configured():
             raise ValueError(
-                f"{required_api_key_name(self.provider)} is required "
-                f"for provider '{self.provider}'."
+                f"{required_api_key_name()} is required for text generation "
+                "(set GEMINI_API_KEY)."
             )
 
     def generate_text(
@@ -109,18 +90,9 @@ class LLMClient:
         max_tokens: int = 1000,
         temperature: float = 0.7,
     ) -> str:
-        """Send `prompt` to the configured backend and return the text body.
-
-        Returns '' if the backend returned no content. Raises ValueError for
-        config errors and HTTP errors for network failures.
-        """
         self.require_configured()
         _suppress_noisy_client_loggers()
-        if self.provider == "gemini":
-            return self._call_gemini(prompt, max_tokens, temperature)
-        return self._call_openai_compatible(prompt, max_tokens, temperature)
-
-    # -- internal ------------------------------------------------------------
+        return self._call_gemini(prompt, max_tokens, temperature)
 
     def _gemini(self) -> Any:
         if self._gemini_client is None:
@@ -140,41 +112,4 @@ class LLMClient:
                 max_output_tokens=max_tokens,
             ),
         )
-        return response.text or ""
-
-    def _call_openai_compatible(
-        self, prompt: str, max_tokens: int, temperature: float
-    ) -> str:
-        url = CHAT_COMPLETION_URLS[self.provider]
-        extra_headers: Dict[str, str] = {}
-        if self.provider == "openrouter":
-            extra_headers = {
-                "HTTP-Referer": os.getenv("OPENROUTER_SITE_URL", "http://localhost:5050"),
-                "X-Title": os.getenv("OPENROUTER_APP_NAME", "WorkflowMVP"),
-            }
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-            **extra_headers,
-        }
-        payload = {
-            "model": self.model,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        }
-        response = requests.post(url, headers=headers, json=payload, timeout=60)
-        response.raise_for_status()
-        data = response.json()
-        choices = data.get("choices") or []
-        if not choices:
-            raise ValueError(f"{self.provider} returned no choices.")
-        message = choices[0].get("message") or {}
-        content = message.get("content", "")
-        if isinstance(content, list):
-            return "\n".join(
-                chunk.get("text", "")
-                for chunk in content
-                if isinstance(chunk, dict)
-            ).strip()
-        return str(content)
+        return gemini_response_to_text(response)
