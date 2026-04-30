@@ -147,6 +147,9 @@ GEMINI_API_KEY=your_key_here
 GEMINI_MODEL=gemini-2.5-flash
 ```
 
+`GEMINI_MODEL` is optional. If unset, WorkflowMVP uses `gemini-2.5-flash`.
+For regular local development, prefer `.env`; the browser Settings modal is a per-request convenience for demos, testing, or temporarily overriding `.env` values.
+
 SMTP settings are optional and only needed for workflows that send email.
 
 ## Run Locally
@@ -194,7 +197,7 @@ Common variables:
 
 ```bash
 GEMINI_API_KEY=...
-GEMINI_MODEL=gemini-2.5-flash
+GEMINI_MODEL=gemini-2.5-flash  # optional; default when unset
 
 EMAIL_USER=...
 EMAIL_PASSWORD=...
