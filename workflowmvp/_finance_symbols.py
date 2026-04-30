@@ -4,13 +4,21 @@ from __future__ import annotations
 
 import re
 
+_COMMON_FINANCE_SYMBOLS = {
+    "bitcoin": "BTC-USD",
+    "btc": "BTC-USD",
+    "ethereum": "ETH-USD",
+    "eth": "ETH-USD",
+    "spy": "SPY",
+}
+
 
 def resolve_finance_symbol_hint(text: str) -> str:
-    """Return a Yahoo Finance symbol only when the user provides explicit syntax.
+    """Return a Yahoo Finance symbol for explicit syntax or very common assets.
 
-    Natural-language identifiers such as "spy", "S&P 500", "Apple", or
-    "bitcoin" should be normalized by the AI planning/repair layer, not by a
-    growing deterministic alias table.
+    This intentionally avoids resolving arbitrary company names. The small
+    common set covers identifiers that users reasonably expect to work without
+    AI repair while keeping broad name-to-symbol lookup out of the parser.
     """
     value = text.strip()
 
@@ -34,5 +42,13 @@ def resolve_finance_symbol_hint(text: str) -> str:
     )
     if match:
         return match.group(1).upper()
+
+    lowered = value.lower()
+    if re.search(r"\bs\s*&\s*p\s*500\b|\bsp\s*500\b|\bsp500\b", lowered):
+        return "^GSPC"
+
+    for name, symbol in _COMMON_FINANCE_SYMBOLS.items():
+        if re.search(rf"\b{re.escape(name)}\b", lowered):
+            return symbol
 
     return ""

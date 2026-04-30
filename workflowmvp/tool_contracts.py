@@ -294,6 +294,11 @@ def build_retry_contract_guidance() -> str:
         "without calling `discover_urls` / `scrape_webpage` — try tools first, then fail fast "
         "without email if nothing was retrieved."
     )
+    lines.append(
+        "- For event schedules, accept the date granularity in the source. A date range "
+        "like 'April 17 - 30' is valid even without a showtime; do not require a single "
+        "MM/DD/YYYY + HH:MM timestamp unless the page provides one."
+    )
     return "\n".join(lines)
 
 
@@ -398,6 +403,28 @@ def _validate_no_example_unit_pricing_in_research_workflow(code: str) -> Optiona
         return (
             "Do not use example/placeholder `unit_price` values in research workflows. "
             "Use prices from scraped text or mark line items as unknown / verify in store."
+        )
+    return None
+
+
+def _validate_no_schedule_failure_email(code: str) -> Optional[str]:
+    """Reject scripts that email a missing-schedule placeholder as if it succeeded."""
+    lowered = code.lower()
+    missing_schedule = (
+        "schedule not found" in lowered
+        or "date and time not found" in lowered
+        or "could not find the schedule" in lowered
+    )
+    sends_email = (
+        "get_tool('send_email')" in code
+        or 'get_tool("send_email")' in code
+        or "send_email_tool.function" in code
+    )
+    if missing_schedule and sends_email:
+        return (
+            "Do not send email with a missing-schedule placeholder. For schedule workflows, "
+            "extract the date/range actually present in scraped text, or fail fast before "
+            "`send_email` if no schedule detail was retrieved."
         )
     return None
 
@@ -583,6 +610,10 @@ def validate_tool_contracts(code: str) -> None:
     toy_p = _validate_no_example_unit_pricing_in_research_workflow(code)
     if toy_p:
         raise ValueError(toy_p)
+
+    schedule_email = _validate_no_schedule_failure_email(code)
+    if schedule_email:
+        raise ValueError(schedule_email)
 
     json_loads_err = _validate_generate_text_json_via_helper_when_web(code)
     if json_loads_err:

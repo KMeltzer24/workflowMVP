@@ -91,19 +91,22 @@ def test_company_name_is_not_resolved_by_generic_parser(parser: WorkflowParser) 
     assert steps[0].parameters.get("ticker") == ""
 
 
-def test_sn_p_500_is_not_resolved_by_generic_parser(parser: WorkflowParser) -> None:
-    for line in (
-        "1. Find the current price of the S&P 500.",
-        "1. Find the SP 500 stock price.",
-        "1. Get current price sp500.",
-    ):
+def test_common_finance_names_are_resolved(parser: WorkflowParser) -> None:
+    examples = {
+        "1. Find the current price of the S&P 500.": "^GSPC",
+        "1. Find the SP 500 stock price.": "^GSPC",
+        "1. Get current price sp500.": "^GSPC",
+        "1. Then find the price of spy.": "SPY",
+        "1. Then find the price of bitcoin.": "BTC-USD",
+    }
+    for line, ticker in examples.items():
         steps = parser.parse_workflow(line)
         assert steps[0].action == "fetch_stock_price"
-        assert steps[0].parameters.get("ticker") == ""
+        assert steps[0].parameters.get("ticker") == ticker
 
 
-def test_natural_language_ticker_like_word_is_not_resolved(parser: WorkflowParser) -> None:
-    steps = parser.parse_workflow("1. Then find the price of spy.")
+def test_arbitrary_company_name_is_not_resolved(parser: WorkflowParser) -> None:
+    steps = parser.parse_workflow("1. Then find the price of Apple.")
     assert steps[0].action == "fetch_stock_price"
     assert steps[0].parameters.get("ticker") == ""
 

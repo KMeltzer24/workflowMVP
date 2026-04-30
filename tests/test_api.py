@@ -131,7 +131,7 @@ def test_parse_workflow_reports_skipped_ai_repair_without_key(
     response = client.post(
         "/api/parse-workflow",
         json={
-            "workflow_text": "1. Then find the price of spy.",
+            "workflow_text": "1. Get the current Apple stock price",
             "credentials": {},
         },
     )

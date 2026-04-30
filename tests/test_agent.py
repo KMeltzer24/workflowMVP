@@ -93,6 +93,8 @@ def test_system_prompt_has_structural_sections(agent: WorkflowAgent) -> None:
     assert "`http_request` may already return a parsed dict/list" in prompt
     assert "CUSTOM STEP HANDLING" in prompt
     assert "Do not treat `custom` as \"log and skip\"" in prompt
+    assert "April 17 - 30" in prompt
+    assert "time not listed" in prompt
 
 
 def test_system_prompt_groups_tools_by_category(agent: WorkflowAgent) -> None:
@@ -505,3 +507,19 @@ if r.get("success") and (r.get("result") or ""):
 tools.get_tool("write_json").function(file_path="dresser_research.json", data=research_data, indent=2)
 """.strip()
     WorkflowAgent._validate_generated_python(ok)
+
+
+def test_validate_generated_python_rejects_schedule_placeholder_email() -> None:
+    bad = """
+from workflowmvp.tools import ToolRegistry
+tools = ToolRegistry()
+send_email_tool = tools.get_tool('send_email')
+schedule_details = "Ani-marathon schedule not found in scraped content."
+send_email_tool.function(
+    recipient="person@example.com",
+    subject="Ani-Marathon Reminder",
+    body=schedule_details,
+)
+""".strip()
+    with pytest.raises(ValueError, match="missing-schedule placeholder"):
+        WorkflowAgent._validate_generated_python(bad)

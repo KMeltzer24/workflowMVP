@@ -213,7 +213,7 @@ class WorkflowAgent:
 
 Allowed actions: {", ".join(tool_names)}, custom
 
-Return ONLY a JSON array. Each object must have these keys:
+Return ONLY a valid JSON array. Each object must have these keys:
   step_id, description, action, parameters (object), dependencies (array)
 
 Rules:
@@ -226,7 +226,10 @@ Rules:
 - dependencies must reference earlier step_ids only.
 - Do not invent runtime facts such as dates, prices, event times, statistics, or scraped content.
   Only normalize identifiers and parameters needed to call tools.
-- No markdown, no commentary — raw JSON only.
+- Do not write Python, JavaScript, pseudocode, or implementation snippets in any field.
+- Do not use templating syntax such as "{{step_1.output}}"; use dependencies to express data flow.
+- Keep parameter values short: strings, numbers, booleans, lists, or objects only.
+- No markdown, no code fences, no commentary — valid raw JSON only.
 
 Original workflow text:
 {workflow_text}
@@ -437,7 +440,7 @@ If information is missing or retrieval fails: **stop, log clearly, or say in the
 
 **NO FABRICATION ≠ skip tools:** When steps ask for **web research**, you must still **run** `discover_urls` / `scrape_webpage` / `http_request` (using URLs from the step text when given, otherwise a reasonable official `start_url`). Do **not** emit stub `research.json` files, `"status": "failed"` research payloads, or “URLs not specified” excuses **without** those tool attempts. If every attempt fails, **return before** writing reports or `send_email`.
 
-**Schedules / "when is …":** Retrieve page or feed text first (`scrape_webpage`, `http_request`, `download`), then summarize or email. If the step names an organization but gives no URL, one reasonable attempt at its **official public** site is OK; on failure, do not invent dates. **Best:** put a **direct link** to the program or festival page in the step text when you have one — homepages often omit schedule detail.
+**Schedules / "when is …":** Retrieve page or feed text first (`scrape_webpage`, `http_request`, `download`), then summarize or email. If the step names an organization but gives no URL, one reasonable attempt at its **official public** site is OK; on failure, do not invent dates. Accept the schedule granularity present in the source: a page date range like "April 17 - 30" is a valid answer even if no showtime is listed; say "time not listed" instead of treating the whole schedule as missing. Do not force a single MM/DD/YYYY + HH:MM timestamp unless the source actually provides one. **Best:** put a **direct link** to the program or festival page in the step text when you have one — homepages often omit schedule detail.
 
 Available tools:
 {tools_info}
