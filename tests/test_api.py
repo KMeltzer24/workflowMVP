@@ -122,6 +122,30 @@ def test_parse_workflow_repairs_missing_param_when_key_provided(client) -> None:
     assert payload["steps"][0]["parameters"]["ticker"] == "AAPL"
 
 
+def test_parse_workflow_reports_skipped_ai_repair_without_key(
+    client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+    response = client.post(
+        "/api/parse-workflow",
+        json={
+            "workflow_text": "1. Then find the price of spy.",
+            "credentials": {},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["success"] is True
+    assert payload["ai_assisted"] is False
+    assert payload["ai_repair"] == {
+        "needed": True,
+        "attempted": False,
+        "error": "Missing GEMINI_API_KEY; AI repair was skipped.",
+    }
+
+
 def test_parse_single_step_endpoint(client) -> None:
     response = client.post(
         "/api/parse-single-step",

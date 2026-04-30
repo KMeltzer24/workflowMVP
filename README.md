@@ -139,7 +139,11 @@ This project demonstrates junior SWE skills that are useful on real teams:
 ## Requirements
 
 - Python 3.11+
-- Google Gemini API key for code generation and video analysis
+- Google Gemini API key for workflow repair, code generation, and video analysis
+
+The rule parser can draft simple text steps without Gemini, but the end-to-end
+app requires `GEMINI_API_KEY`: ambiguous step repair, generated Python, and
+video-to-workflow analysis all use Gemini.
 
 ## Setup
 

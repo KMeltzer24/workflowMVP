@@ -26,6 +26,7 @@ const state = {
     streaming: false,
     parseConfidence: null,
     parseAiAssisted: false,
+    parseAiRepair: null,
     tools: [],
     generateTimerId: null,
     generateStartMs: null,
@@ -308,6 +309,7 @@ async function parseTextWorkflow(text) {
         state.stepsEdited = false;
         state.parseConfidence = data.parse_confidence || null;
         state.parseAiAssisted = Boolean(data.ai_assisted);
+        state.parseAiRepair = data.ai_repair || null;
         displaySteps(data.steps);
         renderParseInsights();
         enableGenerate(true);
@@ -355,6 +357,7 @@ async function parseVideoWorkflow(videoFile) {
         state.stepsEdited = false;
         state.parseConfidence = data.parse_confidence || null;
         state.parseAiAssisted = Boolean(data.ai_assisted);
+        state.parseAiRepair = data.ai_repair || null;
         displaySteps(data.steps);
         renderParseInsights();
         enableGenerate(true);
@@ -485,9 +488,18 @@ function renderParseInsights() {
     const scorePct = Math.round(Number(c.score || 0) * 100);
     const mode = state.parseAiAssisted ? "AI-assisted" : "Rule-first";
     const reasons = Array.isArray(c.reasons) ? c.reasons.slice(0, 3) : [];
+    const repair = state.parseAiRepair;
+    const repairMessage = repair?.needed && !state.parseAiAssisted
+        ? repair.error
+            ? `AI repair failed: ${repair.error}`
+            : repair.attempted
+                ? "AI repair ran but did not improve the parsed steps."
+                : "AI repair was needed but was not attempted."
+        : "";
     box.innerHTML = `
         <strong>Parse quality:</strong> ${scorePct}% (${mode})
         <div class="hint">Custom steps: ${c.custom_steps || 0}, missing-param steps: ${c.missing_param_steps || 0}</div>
+        ${repairMessage ? `<div class="hint">${escapeHtml(repairMessage)}</div>` : ""}
         ${
             reasons.length
                 ? `<div class="hint">${reasons.map(escapeHtml).join(" | ")}</div>`
@@ -598,8 +610,12 @@ function formatGenerationFailure(data) {
     const errors = Array.isArray(data?.validation_errors)
         ? data.validation_errors.map(formatValidationIssue).filter(Boolean)
         : [];
-    if (!errors.length) return base;
-    return `${base}\n${errors.join("\n")}`;
+    const repairError = data?.ai_repair?.error
+        ? `AI repair failed: ${data.ai_repair.error}`
+        : "";
+    const details = [...errors, repairError].filter(Boolean);
+    if (!details.length) return base;
+    return `${base}\n${details.join("\n")}`;
 }
 
 function showGenerateFailure(data) {

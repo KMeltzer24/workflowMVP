@@ -37,7 +37,7 @@
                 <strong>WorkflowMVP</strong> is an end-to-end <em>constraints-first</em> automation stack:
                 prose (or captured video) becomes structured actions, then <strong>Gemini</strong> emits Python wired to a curated
                 <strong>tool registry</strong> &mdash; the <strong>Tools</strong> tab lists every builtin the server exposes.
-                Parsing is rule-led with optional model repair; generated scripts validate before write and run under rlimits below.
+                Parsing starts rule-led, then Gemini repairs ambiguous steps and generates Python; scripts validate before write and run under rlimits below.
             </p>
         </section>
         <section class="tab-panel active" id="tab-create" role="tabpanel">

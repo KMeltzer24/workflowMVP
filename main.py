@@ -316,26 +316,34 @@ def parse_workflow():
         confidence = planning.parse_confidence
 
         ai_assisted = False
+        ai_repair_attempted = False
         ai_assist_error: Optional[str] = None
-        if api_key and planning.should_ai_repair:
-            try:
-                ai_agent = WorkflowAgent(api_key=api_key, model=model)
-                improved = ai_agent.improve_parsed_steps(workflow_text, steps)
-                if improved:
-                    steps = improved
-                    ai_assisted = True
-                    confidence = parser.assess_parse_confidence(steps)
-            except Exception as exc:  # pragma: no cover - best effort enhancement
-                ai_assist_error = str(exc)
+        if planning.should_ai_repair:
+            if api_key:
+                ai_repair_attempted = True
+                try:
+                    ai_agent = WorkflowAgent(api_key=api_key, model=model)
+                    improved = ai_agent.improve_parsed_steps(workflow_text, steps)
+                    if improved:
+                        steps = improved
+                        ai_assisted = True
+                        confidence = parser.assess_parse_confidence(steps)
+                except Exception as exc:  # pragma: no cover - best effort enhancement
+                    ai_assist_error = str(exc)
+            else:
+                ai_assist_error = "Missing GEMINI_API_KEY; AI repair was skipped."
 
         response: Dict[str, Any] = {
             "success": True,
             "steps": [_step_to_dict(s) for s in steps],
             "parse_confidence": confidence,
             "ai_assisted": ai_assisted,
+            "ai_repair": {
+                "needed": planning.should_ai_repair,
+                "attempted": ai_repair_attempted,
+                "error": ai_assist_error,
+            },
         }
-        if ai_assist_error and _is_debug():
-            response["ai_assist_error"] = ai_assist_error
         return jsonify(response)
     except Exception as exc:  # pragma: no cover - defensive
         return jsonify({"success": False, "error": str(exc)})
@@ -427,8 +435,10 @@ def parse_video():
         steps = planning.steps
         confidence = planning.parse_confidence
         ai_assisted = False
+        ai_repair_attempted = False
         ai_assist_error: Optional[str] = None
         if planning.should_ai_repair:
+            ai_repair_attempted = True
             try:
                 ai_agent = WorkflowAgent(api_key=api_key, model=model)
                 improved = ai_agent.improve_parsed_steps(workflow_text, steps)
@@ -445,9 +455,12 @@ def parse_video():
             "workflow_text": workflow_text,
             "parse_confidence": confidence,
             "ai_assisted": ai_assisted,
+            "ai_repair": {
+                "needed": planning.should_ai_repair,
+                "attempted": ai_repair_attempted,
+                "error": ai_assist_error,
+            },
         }
-        if ai_assist_error and debug_mode:
-            response["ai_assist_error"] = ai_assist_error
         return jsonify(
             response
         )
@@ -490,6 +503,7 @@ def generate_workflow():
 
         validation = validate_workflow_steps(steps_data)
         ai_repaired_for_generation = False
+        ai_repair_error: Optional[str] = None
         if not validation.valid:
             repair_steps = _raw_steps_for_repair(steps_data)
             repair_text = _workflow_text_from_steps(repair_steps)
@@ -504,8 +518,8 @@ def generate_workflow():
                         if repaired_validation.valid:
                             validation = repaired_validation
                             ai_repaired_for_generation = True
-                except Exception:
-                    pass
+                except Exception as exc:
+                    ai_repair_error = str(exc)
         validation_warnings = [issue.to_dict() for issue in validation.warnings]
         if not validation.valid:
             return (
@@ -517,6 +531,10 @@ def generate_workflow():
                             issue.to_dict() for issue in validation.errors
                         ],
                         "validation_warnings": validation_warnings,
+                        "ai_repair": {
+                            "attempted": bool(repair_steps and repair_text),
+                            "error": ai_repair_error,
+                        },
                     }
                 ),
                 400,
