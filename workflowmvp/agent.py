@@ -220,7 +220,12 @@ Rules:
 - Preserve step order and numbering.
 - Prefer a specific allowed action over "custom" when reasonable.
 - Include obvious parameters from the text (url, file_path, recipient, ticker, etc.).
+- Normalize identifiers into the format expected by the chosen tool when the user intent is clear.
+  Examples: finance price checks should use Yahoo-compatible tickers such as "SPY",
+  "^GSPC" for the S&P 500 index, or "BTC-USD" for Bitcoin USD.
 - dependencies must reference earlier step_ids only.
+- Do not invent runtime facts such as dates, prices, event times, statistics, or scraped content.
+  Only normalize identifiers and parameters needed to call tools.
 - No markdown, no commentary — raw JSON only.
 
 Original workflow text:

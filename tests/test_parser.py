@@ -91,7 +91,7 @@ def test_company_name_is_not_resolved_by_generic_parser(parser: WorkflowParser) 
     assert steps[0].parameters.get("ticker") == ""
 
 
-def test_sn_p_500_resolves_to_gspc(parser: WorkflowParser) -> None:
+def test_sn_p_500_is_not_resolved_by_generic_parser(parser: WorkflowParser) -> None:
     for line in (
         "1. Find the current price of the S&P 500.",
         "1. Find the SP 500 stock price.",
@@ -99,14 +99,16 @@ def test_sn_p_500_resolves_to_gspc(parser: WorkflowParser) -> None:
     ):
         steps = parser.parse_workflow(line)
         assert steps[0].action == "fetch_stock_price"
-        assert steps[0].parameters.get("ticker") == "^GSPC"
+        assert steps[0].parameters.get("ticker") == ""
+
+
+def test_natural_language_ticker_like_word_is_not_resolved(parser: WorkflowParser) -> None:
+    steps = parser.parse_workflow("1. Then find the price of spy.")
+    assert steps[0].action == "fetch_stock_price"
+    assert steps[0].parameters.get("ticker") == ""
 
 
 def test_explicit_ticker_marker_is_detected(parser: WorkflowParser) -> None:
-    steps = parser.parse_workflow("1. Then find the price of spy.")
-    assert steps[0].action == "fetch_stock_price"
-    assert steps[0].parameters.get("ticker") == "SPY"
-
     steps = parser.parse_workflow("1. Find the price of $AAPL")
     assert steps[0].action == "fetch_stock_price"
     assert steps[0].parameters.get("ticker") == "AAPL"

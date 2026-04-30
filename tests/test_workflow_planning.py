@@ -6,7 +6,16 @@ from workflowmvp.services.workflow_planning import parse_rough_workflow
 
 
 def test_missing_required_param_triggers_ai_repair() -> None:
-    result = parse_rough_workflow("1. Get the current Apple stock price")
+    result = parse_rough_workflow("1. Then find the price of spy.")
+
+    assert result.steps[0].action == "fetch_stock_price"
+    assert result.steps[0].parameters.get("ticker") == ""
+    assert result.parse_confidence["missing_param_steps"] == 1
+    assert result.should_ai_repair is True
+
+
+def test_index_name_triggers_ai_repair_instead_of_alias_table() -> None:
+    result = parse_rough_workflow("1. Find the current price of the S&P 500.")
 
     assert result.steps[0].action == "fetch_stock_price"
     assert result.steps[0].parameters.get("ticker") == ""
