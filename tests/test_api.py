@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
+
+from workflowmvp.agent import WorkflowAgent
+from workflowmvp.parser import WorkflowStep
 
 
 def test_tools_endpoint(client) -> None:
@@ -75,6 +80,7 @@ def test_examples_endpoint_exposes_requirements(client) -> None:
     assert "EMAIL_USER" in email_example["requires_credentials"]
     assert len(examples) >= 10
 
+
 def test_parse_workflow_endpoint(client) -> None:
     response = client.post(
         "/api/parse-workflow",
@@ -87,6 +93,33 @@ def test_parse_workflow_endpoint(client) -> None:
     assert "parse_confidence" in payload
     assert "score" in payload["parse_confidence"]
     assert "ai_assisted" in payload
+
+
+def test_parse_workflow_repairs_missing_param_when_key_provided(client) -> None:
+    repaired = [
+        WorkflowStep(
+            step_id="step_1",
+            description="Then find the price of spy.",
+            action="fetch_stock_price",
+            parameters={"ticker": "SPY"},
+            dependencies=[],
+        )
+    ]
+
+    with patch.object(WorkflowAgent, "improve_parsed_steps", return_value=repaired):
+        response = client.post(
+            "/api/parse-workflow",
+            json={
+                "workflow_text": "1. Then find the price of spy.",
+                "credentials": {"GEMINI_API_KEY": "dummy-key"},
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["success"] is True
+    assert payload["ai_assisted"] is True
+    assert payload["steps"][0]["parameters"]["ticker"] == "SPY"
 
 
 def test_parse_single_step_endpoint(client) -> None:
@@ -179,6 +212,50 @@ def test_generate_workflow_rejects_unknown_action_before_codegen(client) -> None
     assert payload["error"] == "Invalid workflow steps"
     assert payload["validation_errors"]
     assert payload["validation_errors"][0]["field"] == "action"
+
+
+def test_generate_workflow_repairs_invalid_steps_before_codegen(client) -> None:
+    repaired = [
+        WorkflowStep(
+            step_id="step_1",
+            description="Then find the price of spy.",
+            action="fetch_stock_price",
+            parameters={"ticker": "SPY"},
+            dependencies=[],
+        )
+    ]
+
+    def fake_codegen(self, steps, output_path):  # noqa: ANN001
+        assert steps[0].parameters["ticker"] == "SPY"
+        with open(output_path, "w", encoding="utf-8") as handle:
+            handle.write("print('ok')\n")
+        return "print('ok')\n"
+
+    with (
+        patch.object(WorkflowAgent, "improve_parsed_steps", return_value=repaired),
+        patch.object(WorkflowAgent, "generate_workflow_code", fake_codegen),
+    ):
+        response = client.post(
+            "/api/generate-workflow",
+            json={
+                "steps": [
+                    {
+                        "step_id": "step_1",
+                        "description": "Then find the price of spy.",
+                        "action": "fetch_stock_price",
+                        "parameters": {"ticker": ""},
+                        "dependencies": [],
+                    }
+                ],
+                "name": "repair_test",
+                "credentials": {"GEMINI_API_KEY": "dummy-key"},
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["success"] is True
+    assert payload["ai_repaired_for_generation"] is True
 
 
 def test_run_workflow_rejects_path_outside_generated_dir(client, tmp_path) -> None:

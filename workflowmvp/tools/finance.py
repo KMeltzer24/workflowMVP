@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
+from workflowmvp._finance_symbols import resolve_finance_symbol_hint
+
 from ._base import Tool
 
 
@@ -27,6 +29,7 @@ class FinanceToolsMixin:
         self, ticker: str, period: str = "1d"
     ) -> Dict[str, Any]:
         """Fetch stock/index price via yfinance (no scraping, no rate-limits)."""
+        ticker = resolve_finance_symbol_hint(ticker) or ticker
         try:
             import yfinance as yf
         except ImportError:

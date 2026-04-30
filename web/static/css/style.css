@@ -717,6 +717,7 @@ button.ghost:hover {
     font-size: 0.95rem;
     color: var(--text-muted);
     min-height: 1.35em;
+    white-space: pre-line;
 }
 
 .generate-status.is-active {
@@ -781,7 +782,7 @@ video {
     }
 }
 
-/* Homepage intro strip (portfolio blurb above tab panels) */
+/* Homepage intro strip (subtitle above tab panels) */
 
 .site-intro {
     background: var(--surface-alt);

@@ -80,9 +80,26 @@ def test_indented_continuation_still_merges(parser: WorkflowParser) -> None:
 
 
 def test_bare_uppercase_word_is_not_a_ticker(parser: WorkflowParser) -> None:
-    """USA, ASAP, HTTP and friends must not become stock tickers."""
+    """Bare uppercase words must not become stock tickers."""
     steps = parser.parse_workflow("1. Get the USA price right now")
     assert steps[0].parameters.get("ticker") in (None, "")
+
+
+def test_company_name_is_not_resolved_by_generic_parser(parser: WorkflowParser) -> None:
+    steps = parser.parse_workflow("1. Get the current Apple stock price")
+    assert steps[0].action == "fetch_stock_price"
+    assert steps[0].parameters.get("ticker") == ""
+
+
+def test_sn_p_500_resolves_to_gspc(parser: WorkflowParser) -> None:
+    for line in (
+        "1. Find the current price of the S&P 500.",
+        "1. Find the SP 500 stock price.",
+        "1. Get current price sp500.",
+    ):
+        steps = parser.parse_workflow(line)
+        assert steps[0].action == "fetch_stock_price"
+        assert steps[0].parameters.get("ticker") == "^GSPC"
 
 
 def test_explicit_ticker_marker_is_detected(parser: WorkflowParser) -> None:

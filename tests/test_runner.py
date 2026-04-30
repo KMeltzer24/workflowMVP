@@ -17,6 +17,21 @@ def test_redactor_ignores_short_values() -> None:
     assert redact("smtp.io short") == "smtp.io short"
 
 
+def test_redactor_does_not_hide_non_secret_email_addresses() -> None:
+    redact = build_redactor(
+        {
+            "EMAIL_USER": "kevinmeltzer1@gmail.com",
+            "EMAIL_FROM": "kevinmeltzer1@gmail.com",
+            "EMAIL_PASSWORD": "long-enough-secret",
+        }
+    )
+
+    assert (
+        redact("Sent email to kevinmeltzer1@gmail.com")
+        == "Sent email to kevinmeltzer1@gmail.com"
+    )
+
+
 def test_redactor_leaves_unrelated_text_unchanged() -> None:
     redact = build_redactor({"EMAIL_PASSWORD": "long-enough-secret"})
 

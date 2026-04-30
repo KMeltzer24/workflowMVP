@@ -6,6 +6,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+from workflowmvp._finance_symbols import resolve_finance_symbol_hint
+
 
 @dataclass
 class WorkflowStep:
@@ -307,64 +309,9 @@ class WorkflowParser:
 
         return 'custom', {'description': description}
 
-    # Uppercase abbreviations that users commonly write in workflow descriptions
-    # which are NOT stock tickers. Prevents the bare-uppercase fallback from
-    # turning "Fetch the API stock price" into ticker="API".
-    _NON_TICKER_UPPERCASE = frozenset({
-        'AI', 'API', 'APP', 'APPS', 'ASAP', 'AWS', 'BBC', 'CEO', 'CFO', 'CIO',
-        'CNBC', 'CNN', 'CSS', 'CSV', 'EOD', 'ETF', 'EU', 'FAQ', 'FBI', 'FTP',
-        'FYI', 'GCP', 'GIT', 'GMT', 'GPU', 'HTML', 'HTTP', 'HTTPS', 'ID',
-        'IDE', 'IPO', 'JSON', 'LLM', 'ML', 'MLB', 'NBA', 'NFL', 'NHL', 'NEWS',
-        'NYSE', 'OK', 'OS', 'PDF', 'PHP', 'RAM', 'RSS', 'SDK', 'SQL', 'SSH',
-        'SSL', 'TBD', 'TLS', 'TODO', 'TSV', 'UI', 'UK', 'UN', 'URL', 'US',
-        'USA', 'USD', 'UTC', 'UX', 'VPN', 'XML', 'YAML', 'ZIP',
-    })
-
     def _extract_stock_ticker(self, description: str) -> str:
-        """Resolve a ticker symbol from explicit markers only.
-
-        Matches (in order):
-          - `^GSPC`, `^DJI`, etc. (Yahoo index syntax)
-          - `BTC-USD`, `ETH-USD`, etc. (crypto/forex pairs)
-          - `$AAPL` / `$BRK.B` (cashtag)
-          - "price of <TICKER>" / "cost of <TICKER>" with deny-listed words filtered
-          - "ticker <X>" / "ticker is <X>" / "symbol <X>"
-
-        Bare uppercase tokens are NOT treated as tickers anymore — too many
-        false positives (USA, ASAP, ETF, etc.). When no explicit marker is
-        present we return ''; the user can edit the step or fill the parameter
-        manually before code generation.
-        """
-        d = description.strip()
-        m = re.search(r'\^[A-Za-z]{1,10}\b', d)
-        if m:
-            return m.group(0).upper()
-        m = re.search(r'\b[A-Za-z]{1,6}-USD\b', d, re.IGNORECASE)
-        if m:
-            sym = m.group(0)
-            return sym[:-4].upper() + '-USD'
-        m = re.search(r'\$([A-Za-z]{1,5}(?:\.[A-Za-z])?)\b', d)
-        if m:
-            return m.group(1).upper()
-        m = re.search(
-            r'\b(?:price|cost|quote)\s+of\s+(?:the\s+)?([A-Za-z]{1,5})\b',
-            d,
-            re.IGNORECASE,
-        )
-        if m:
-            candidate = m.group(1).upper()
-            if candidate not in self._NON_TICKER_UPPERCASE:
-                return candidate
-        m = re.search(
-            r'\b(?:ticker|symbol)(?:\s+is)?\s+([A-Za-z]{1,5})\b',
-            d,
-            re.IGNORECASE,
-        )
-        if m:
-            candidate = m.group(1).upper()
-            if candidate not in self._NON_TICKER_UPPERCASE:
-                return candidate
-        return ''
+        """Extract a strong finance symbol hint without resolving company names."""
+        return resolve_finance_symbol_hint(description)
 
     def _extract_directory_params(self, description: str) -> Dict[str, Any]:
         """Extract directory path from description."""

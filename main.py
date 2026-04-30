@@ -27,7 +27,7 @@ import warnings
 from importlib.resources import files
 from queue import Empty, Queue
 from threading import Thread
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 # Suppress noisy gRPC / ALTS warnings emitted by some Google client stacks
@@ -89,6 +89,7 @@ from workflowmvp.services.static_analysis import (  # noqa: E402
     extract_top_level_imports,
 )
 from workflowmvp.services.tool_metadata import tool_category  # noqa: E402
+from workflowmvp.services.workflow_planning import parse_rough_workflow  # noqa: E402
 from workflowmvp.services.workflow_validation import validate_workflow_steps  # noqa: E402
 from workflowmvp.tools import ToolRegistry  # noqa: E402
 
@@ -207,6 +208,37 @@ def _step_to_dict(step: WorkflowStep) -> Dict[str, Any]:
     }
 
 
+def _raw_steps_for_repair(raw_steps: object) -> List[WorkflowStep]:
+    """Best-effort conversion of submitted step JSON for AI repair context."""
+    if not isinstance(raw_steps, list):
+        return []
+
+    repair_steps: List[WorkflowStep] = []
+    for index, raw_step in enumerate(raw_steps, start=1):
+        if not isinstance(raw_step, dict):
+            continue
+        parameters = raw_step.get("parameters")
+        dependencies = raw_step.get("dependencies")
+        repair_steps.append(
+            WorkflowStep(
+                step_id=str(raw_step.get("step_id") or f"step_{index}"),
+                description=str(raw_step.get("description") or "").strip(),
+                action=str(raw_step.get("action") or "custom").strip() or "custom",
+                parameters=parameters if isinstance(parameters, dict) else {},
+                dependencies=dependencies if isinstance(dependencies, list) else [],
+            )
+        )
+    return repair_steps
+
+
+def _workflow_text_from_steps(steps: List[WorkflowStep]) -> str:
+    return "\n".join(
+        f"{index}. {step.description}"
+        for index, step in enumerate(steps, start=1)
+        if step.description
+    )
+
+
 def _safe_name(name: str) -> str:
     import re
 
@@ -279,12 +311,13 @@ def parse_workflow():
         api_key = resolve_gemini_api_key(creds)
         model = resolve_gemini_model(creds)
         parser = WorkflowParser()
-        steps = parser.parse_workflow(workflow_text)
-        confidence = parser.assess_parse_confidence(steps)
+        planning = parse_rough_workflow(workflow_text, parser)
+        steps = planning.steps
+        confidence = planning.parse_confidence
 
         ai_assisted = False
         ai_assist_error: Optional[str] = None
-        if api_key and confidence.get("needs_ai_assist"):
+        if api_key and planning.should_ai_repair:
             try:
                 ai_agent = WorkflowAgent(api_key=api_key, model=model)
                 improved = ai_agent.improve_parsed_steps(workflow_text, steps)
@@ -382,23 +415,41 @@ def parse_video():
             return jsonify(
                 {"success": False, "error": "No frames could be extracted from the video"}
             )
-        workflow_text = infer_workflow_from_frames(frames, api_key)
+        model = resolve_gemini_model(creds)
+        workflow_text = infer_workflow_from_frames(frames, api_key, model=model)
         if not workflow_text or len(workflow_text.strip()) < 10:
             return jsonify(
                 {"success": False, "error": "AI analysis produced no meaningful workflow"}
             )
 
         parser = WorkflowParser()
-        steps = parser.parse_workflow(workflow_text)
-        confidence = parser.assess_parse_confidence(steps)
+        planning = parse_rough_workflow(workflow_text, parser)
+        steps = planning.steps
+        confidence = planning.parse_confidence
+        ai_assisted = False
+        ai_assist_error: Optional[str] = None
+        if planning.should_ai_repair:
+            try:
+                ai_agent = WorkflowAgent(api_key=api_key, model=model)
+                improved = ai_agent.improve_parsed_steps(workflow_text, steps)
+                if improved:
+                    steps = improved
+                    ai_assisted = True
+                    confidence = parser.assess_parse_confidence(steps)
+            except Exception as exc:  # pragma: no cover - best effort enhancement
+                ai_assist_error = str(exc)
+
+        response: Dict[str, Any] = {
+            "success": True,
+            "steps": [_step_to_dict(s) for s in steps],
+            "workflow_text": workflow_text,
+            "parse_confidence": confidence,
+            "ai_assisted": ai_assisted,
+        }
+        if ai_assist_error and debug_mode:
+            response["ai_assist_error"] = ai_assist_error
         return jsonify(
-            {
-                "success": True,
-                "steps": [_step_to_dict(s) for s in steps],
-                "workflow_text": workflow_text,
-                "parse_confidence": confidence,
-                "ai_assisted": False,
-            }
+            response
         )
     except Exception as exc:
         if debug_mode:
@@ -438,6 +489,23 @@ def generate_workflow():
         model = resolve_gemini_model(creds)
 
         validation = validate_workflow_steps(steps_data)
+        ai_repaired_for_generation = False
+        if not validation.valid:
+            repair_steps = _raw_steps_for_repair(steps_data)
+            repair_text = _workflow_text_from_steps(repair_steps)
+            if repair_steps and repair_text:
+                try:
+                    ai_agent = WorkflowAgent(api_key=api_key, model=model)
+                    improved = ai_agent.improve_parsed_steps(repair_text, repair_steps)
+                    if improved:
+                        repaired_validation = validate_workflow_steps(
+                            [_step_to_dict(step) for step in improved]
+                        )
+                        if repaired_validation.valid:
+                            validation = repaired_validation
+                            ai_repaired_for_generation = True
+                except Exception:
+                    pass
         validation_warnings = [issue.to_dict() for issue in validation.warnings]
         if not validation.valid:
             return (
@@ -473,6 +541,7 @@ def generate_workflow():
                 "message": "Workflow generated successfully",
                 "generation_seconds": generation_seconds,
                 "validation_warnings": validation_warnings,
+                "ai_repaired_for_generation": ai_repaired_for_generation,
             }
         )
     except Exception as exc:

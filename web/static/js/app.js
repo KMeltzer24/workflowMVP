@@ -148,7 +148,11 @@ function buildToolCategoryOptions(tools) {
     for (const tool of tools) {
         categories.add(toolCategory(tool));
     }
-    const ordered = Array.from(categories).sort();
+    const ordered = Array.from(categories).sort((a, b) => {
+        if (a === "all") return -1;
+        if (b === "all") return 1;
+        return a.localeCompare(b);
+    });
     select.innerHTML = "";
     for (const category of ordered) {
         const option = document.createElement("option");
@@ -573,11 +577,39 @@ function stopGenerateProgress() {
             delete btn.dataset.prevLabel;
         }
     }
-    if (status) {
+    if (status && status.classList.contains("is-active")) {
         status.classList.add("hidden");
         status.classList.remove("is-active");
         status.textContent = "";
     }
+}
+
+function formatValidationIssue(issue) {
+    if (!issue || typeof issue !== "object") return "";
+    const parts = [];
+    if (issue.step_id) parts.push(issue.step_id);
+    if (issue.field) parts.push(issue.field);
+    const prefix = parts.length ? `${parts.join(" · ")}: ` : "";
+    return `${prefix}${issue.message || "Invalid step"}`;
+}
+
+function formatGenerationFailure(data) {
+    const base = data?.error || "Generation failed";
+    const errors = Array.isArray(data?.validation_errors)
+        ? data.validation_errors.map(formatValidationIssue).filter(Boolean)
+        : [];
+    if (!errors.length) return base;
+    return `${base}\n${errors.join("\n")}`;
+}
+
+function showGenerateFailure(data) {
+    const message = formatGenerationFailure(data);
+    const status = document.getElementById("generateStatus");
+    if (status) {
+        status.classList.remove("hidden", "is-active");
+        status.textContent = message;
+    }
+    toast(message.split("\n")[0], "error");
 }
 
 async function generateWorkflow() {
@@ -604,7 +636,7 @@ async function generateWorkflow() {
                 openSettings();
                 return;
             }
-            toast(`Generation failed: ${data.error}`, "error");
+            showGenerateFailure(data);
             return;
         }
         state.currentWorkflowPath = data.output_path;

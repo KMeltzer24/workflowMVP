@@ -6,7 +6,7 @@
 
 WorkflowMVP is a Flask application that turns plain-English workflow descriptions, or a short screen recording, into runnable Python automation scripts.
 
-The project is designed as a practical AI engineering demo: it combines rule-based parsing, optional Gemini-assisted parsing, Gemini code generation, a constrained tool system, subprocess execution, live run logs, and safety checks around generated code.
+The project is designed as a practical AI engineering demo: it combines rule-based parsing, Gemini-assisted workflow repair, Gemini code generation, a constrained tool system, subprocess execution, live run logs, and safety checks around generated code.
 
 ## What It Does
 
@@ -30,12 +30,13 @@ Example workflow:
 
 ```mermaid
 flowchart LR
-    input["Text or video input"] --> parser["WorkflowParser"]
-    input --> video["OpenCV frame sampler"]
+    text["Text input"] --> parser["WorkflowParser"]
+    video_input["Video upload"] --> video["OpenCV frame sampler"]
     video --> vision["Gemini vision prompt"]
     vision --> parser
-    parser --> validation["Typed step validation"]
-    validation --> agent["WorkflowAgent + Gemini"]
+    parser --> planner["Shared workflow planner / repair"]
+    planner --> validation["Typed step validation"]
+    validation --> agent["WorkflowAgent + Gemini codegen"]
     agent --> script["Generated Python script"]
     script --> runner["Subprocess runner"]
     runner --> tools["ToolRegistry"]
@@ -45,9 +46,11 @@ flowchart LR
 Key components:
 
 - `main.py` - Flask routes, UI endpoints, workflow generation, and run streaming.
-- `workflowmvp/parser.py` - rule-first parser that converts prose into structured workflow steps.
-- `workflowmvp/agent.py` - Gemini-backed code generator for runnable Python workflows.
-- `workflowmvp/services/` - runner, validation, credentials, cleanup, path safety, and static analysis helpers.
+- `workflowmvp/parser.py` - rule-first parser that creates rough structured workflow steps.
+- `workflowmvp/services/workflow_planning.py` - shared planning boundary that decides when rough text/video steps need Gemini repair before code generation.
+- `workflowmvp/services/workflow_validation.py` - typed validation layer for step shape, required params, allowed actions, dependencies, and side-effecting tools.
+- `workflowmvp/agent.py` - Gemini-backed step repair and code generator for runnable Python workflows.
+- `workflowmvp/services/` - runner, credentials, cleanup, path safety, static analysis, planning, and validation helpers.
 - `workflowmvp/tools/` - built-in tool registry used by generated scripts.
 - `workflowmvp/prompts/` - versioned prompt templates for LLM workflows.
 - `web/` - browser UI for creating, generating, and running workflows.
@@ -108,6 +111,18 @@ The registry also includes practical safety controls:
 - Generated code is compiled and checked against known tool-contract mistakes before saving.
 
 From an engineering perspective, the registry is intentionally simple: each tool is a small Python function wrapped by a shared response normalizer, with tests covering safety rules, parsing contracts, and common success/failure paths.
+
+## Planning Flow
+
+Text and video inputs intentionally converge before code generation:
+
+1. Text input is parsed directly by the rule-first parser.
+2. Video input is sampled into key frames, summarized into rough numbered steps by Gemini vision, then parsed by the same rule-first parser.
+3. The shared planner checks parse quality. Any `custom` step, missing required parameter, or low-confidence parse can trigger one Gemini repair pass.
+4. Repaired steps must pass typed validation before code generation.
+5. Code generation receives structured, validated steps instead of vague prose.
+
+This keeps the rule parser small and predictable while using the LLM where it is strongest: interpreting ambiguous user intent and normalizing it into concrete tool calls.
 
 ## Why This Project Matters
 
