@@ -114,7 +114,7 @@ def test_system_prompt_inlines_only_relevant_guidance(agent: WorkflowAgent) -> N
     ]
     prompt = agent._create_system_prompt(steps)
     # generate_text guidance is always-on for codegen flexibility.
-    assert "AI TEXT GENERATION" in prompt
+    assert "AI TEXT —" in prompt
     # No scraping in this workflow → no SCRAPING block.
     assert "SCRAPING — scrape_webpage" not in prompt
     # No fetch_stock_price step → no STOCK guidance.

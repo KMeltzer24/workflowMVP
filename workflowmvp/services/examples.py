@@ -128,7 +128,7 @@ def list_examples() -> List[Dict[str, Any]]:
                 "1. Fetch the current price of the S&P 500 (ticker ^GSPC)\n"
                 "2. Write a haiku about the S&P 500 price\n"
                 "3. Write the haiku to file \"sp500_haiku.txt\"\n"
-                "4. Send email to kevinmeltzer1@gmail.com with subject \"S&P 500 Haiku\" "
+                "4. Send email to you@example.com with subject \"S&P 500 Haiku\" "
                 "and body set to the full contents of file \"sp500_haiku.txt\""
             ),
             "requires_credentials": ACTION_REQUIREMENTS["send_email"],
