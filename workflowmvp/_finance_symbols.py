@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 
-
 _COMMON_SYMBOL_ALIASES = (
     (re.compile(r"s\s*&\s*p\s*(\d\s*)?500\b", re.IGNORECASE), "^GSPC"),
     (re.compile(r"\bsp\s*500\b", re.IGNORECASE), "^GSPC"),
