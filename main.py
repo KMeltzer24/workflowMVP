@@ -305,6 +305,7 @@ def get_examples():
 @app.route("/api/parse-workflow", methods=["POST"])
 def parse_workflow():
     try:
+        parse_started = time.monotonic()
         payload = request.get_json(silent=True) or {}
         workflow_text = payload.get("workflow_text", "")
         creds = sanitize_credentials(payload.get("credentials"))
@@ -343,6 +344,7 @@ def parse_workflow():
                 "attempted": ai_repair_attempted,
                 "error": ai_assist_error,
             },
+            "parse_seconds": round(time.monotonic() - parse_started, 3),
         }
         return jsonify(response)
     except Exception as exc:  # pragma: no cover - defensive
@@ -378,6 +380,7 @@ def parse_video():
     video_path: Optional[str] = None
     temp_dir: Optional[str] = None
     try:
+        parse_started = time.monotonic()
         if "video" not in request.files:
             return jsonify({"success": False, "error": "No video file provided"})
         video_file = request.files["video"]
@@ -460,6 +463,7 @@ def parse_video():
                 "attempted": ai_repair_attempted,
                 "error": ai_assist_error,
             },
+            "parse_seconds": round(time.monotonic() - parse_started, 3),
         }
         return jsonify(
             response

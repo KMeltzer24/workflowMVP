@@ -93,6 +93,7 @@ def test_parse_workflow_endpoint(client) -> None:
     assert "parse_confidence" in payload
     assert "score" in payload["parse_confidence"]
     assert "ai_assisted" in payload
+    assert isinstance(payload["parse_seconds"], float)
 
 
 def test_parse_workflow_repairs_missing_param_when_key_provided(client) -> None:

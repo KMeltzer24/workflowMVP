@@ -27,7 +27,10 @@ const state = {
     parseConfidence: null,
     parseAiAssisted: false,
     parseAiRepair: null,
+    parseSeconds: null,
     tools: [],
+    parseTimerId: null,
+    parseStartMs: null,
     generateTimerId: null,
     generateStartMs: null,
     lastGenerationSeconds: null,
@@ -291,6 +294,7 @@ function parseWorkflow() {
 
 async function parseTextWorkflow(text) {
     toast("Parsing workflow...");
+    startParseProgress("Parsing workflow");
     try {
         const response = await fetch("/api/parse-workflow", {
             method: "POST",
@@ -310,6 +314,7 @@ async function parseTextWorkflow(text) {
         state.parseConfidence = data.parse_confidence || null;
         state.parseAiAssisted = Boolean(data.ai_assisted);
         state.parseAiRepair = data.ai_repair || null;
+        state.parseSeconds = parseDurationSeconds(data);
         displaySteps(data.steps);
         renderParseInsights();
         enableGenerate(true);
@@ -323,11 +328,14 @@ async function parseTextWorkflow(text) {
         }
     } catch (err) {
         toast(`Parse error: ${err.message}`, "error");
+    } finally {
+        stopParseProgress();
     }
 }
 
 async function parseVideoWorkflow(videoFile) {
     toast("Processing video (this can take a moment)...");
+    startParseProgress("Processing video");
     try {
         const formData = new FormData();
         formData.append("video", videoFile);
@@ -358,12 +366,51 @@ async function parseVideoWorkflow(videoFile) {
         state.parseConfidence = data.parse_confidence || null;
         state.parseAiAssisted = Boolean(data.ai_assisted);
         state.parseAiRepair = data.ai_repair || null;
+        state.parseSeconds = parseDurationSeconds(data);
         displaySteps(data.steps);
         renderParseInsights();
         enableGenerate(true);
         toast(`Parsed ${data.steps.length} steps from video`, "success");
     } catch (err) {
         toast(`Video parse error: ${err.message}`, "error");
+    } finally {
+        stopParseProgress();
+    }
+}
+
+function parseDurationSeconds(data) {
+    const serverSeconds = Number(data?.parse_seconds);
+    if (Number.isFinite(serverSeconds)) return serverSeconds;
+    if (state.parseStartMs == null) return null;
+    return (Date.now() - state.parseStartMs) / 1000;
+}
+
+function startParseProgress(label) {
+    const btn = document.getElementById("parseBtn");
+    if (!btn) return;
+    btn.dataset.prevLabel = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = `${label}... 0s`;
+    state.parseStartMs = Date.now();
+    state.parseTimerId = window.setInterval(() => {
+        if (state.parseStartMs == null) return;
+        btn.textContent = `${label}... ${formatGenerateElapsed(Date.now() - state.parseStartMs)}`;
+    }, 250);
+}
+
+function stopParseProgress() {
+    if (state.parseTimerId != null) {
+        window.clearInterval(state.parseTimerId);
+        state.parseTimerId = null;
+    }
+    state.parseStartMs = null;
+    const btn = document.getElementById("parseBtn");
+    if (!btn) return;
+    btn.disabled = false;
+    const prev = btn.dataset.prevLabel;
+    if (prev) {
+        btn.textContent = prev;
+        delete btn.dataset.prevLabel;
     }
 }
 
@@ -487,6 +534,7 @@ function renderParseInsights() {
     }
     const scorePct = Math.round(Number(c.score || 0) * 100);
     const mode = state.parseAiAssisted ? "AI-assisted" : "Rule-first";
+    const duration = formatGenerationWallClockSeconds(state.parseSeconds);
     const reasons = Array.isArray(c.reasons) ? c.reasons.slice(0, 3) : [];
     const repair = state.parseAiRepair;
     const repairMessage = repair?.needed && !state.parseAiAssisted
@@ -498,6 +546,7 @@ function renderParseInsights() {
         : "";
     box.innerHTML = `
         <strong>Parse quality:</strong> ${scorePct}% (${mode})
+        ${duration ? `<div class="hint">Parsed in ${escapeHtml(duration)}</div>` : ""}
         <div class="hint">Custom steps: ${c.custom_steps || 0}, missing-param steps: ${c.missing_param_steps || 0}</div>
         ${repairMessage ? `<div class="hint">${escapeHtml(repairMessage)}</div>` : ""}
         ${
