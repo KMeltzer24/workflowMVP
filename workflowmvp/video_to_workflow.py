@@ -17,6 +17,7 @@ from google import genai
 from google.genai import types
 
 from .llm import DEFAULT_GEMINI_MODEL, gemini_response_to_text
+from .prompts import load_prompt_template
 
 logger = logging.getLogger(__name__)
 
@@ -37,32 +38,8 @@ def _resolve_gemini_model(model: Optional[str]) -> str:
 
 def _video_workflow_prompt(frame_count: int) -> str:
     """Instructions for Gemini vision: outcome-oriented workflow text from key frames."""
-    return f"""You are analyzing {frame_count} screenshots from a screen recording.
-
-## Task
-Infer the **outcome** the user wants (what to accomplish), not a play-by-play of clicks and keystrokes.
-
-## Rules
-- **No frozen facts:** on-screen times, countdowns, snippets, and search results are stale after the recording. Describe **what to compute at run time**, not literals copied from the UI.
-- **Intent from UI:** use visible queries, headings, and geography to infer goals (e.g. local vs exchange/session clock, regions, IANA timezones when appropriate). Keep “user local” and “market/session close” separate when both matter.
-- **Email addresses:** copy the visible **To:** / recipient field **exactly** (character by character). Digits in the local-part (e.g. `kevinmeltzer` vs `kevinmeltzer1`) are easy to misread from video — double-check. Do not “normalize” or substitute a different address.
-- **Email:** if mail compose or send appears, end with **send email** using that recipient and subject **themes** from the recording; body instructions must **derive** content from earlier computational steps.
-- **Scope:** automate the goal, not every hover, type, or click. Search + email flows → gather or compute facts, then one email, unless true browser automation is required.
-- **Stable data:** preserve emails, paths, tickers, explicit API URLs, and subject themes visible in the UI.
-- **URLs:** prefer explicit feeds or API URLs over long tracked portal URLs when summarizing external content.
-- **Implementability:** each step must be doable with Python stdlib, HTTP, files, email, and this app’s tool layer — **no** reliance on unspecified third-party packages.
-
-## Output format
-Number steps (1., 2., 3., …). For email steps: recipient, subject intent, and body tied to **computed** earlier steps — never paste transcript text as fixed truth.
-
-## Pattern examples (not exhaustive)
-✓ Current local time in the timezone implied by searches or visible locale in the recording.
-✓ Next nominal regular-session US equity close and minutes until then at run time (state simplifying assumptions in the step text).
-✓ Send email to … with subject …; body uses computed times and intervals.
-✗ A permanent answer copied from an on-screen countdown (e.g. “22 minutes”).
-✗ Many steps that only narrate typing and clicking with no runnable outcome.
-
-Generate the workflow text now.""".strip()
+    template = load_prompt_template("video_workflow_v1.txt")
+    return template.format(frame_count=frame_count).strip()
 
 
 def _ensure_parent_dir(path: str) -> None:

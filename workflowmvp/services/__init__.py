@@ -12,6 +12,8 @@ from . import (
     paths,
     runner,
     static_analysis,
+    tool_metadata,
+    workflow_validation,
 )
 
 __all__ = [
@@ -21,4 +23,6 @@ __all__ = [
     "paths",
     "runner",
     "static_analysis",
+    "tool_metadata",
+    "workflow_validation",
 ]

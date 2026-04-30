@@ -44,10 +44,13 @@ class ArchiveToolsMixin:
             if parent:
                 os.makedirs(parent, exist_ok=True)
 
+            compressed = 0
+            skipped: List[str] = []
             with zipfile.ZipFile(safe_archive, "w", zipfile.ZIP_DEFLATED) as zipf:
                 for file_path in files:
                     safe_file = self._sandbox_path(file_path)
                     if not os.path.exists(safe_file):
+                        skipped.append(file_path)
                         continue
                     if include_dirs:
                         arcname = (
@@ -58,7 +61,19 @@ class ArchiveToolsMixin:
                         zipf.write(safe_file, arcname=arcname)
                     else:
                         zipf.write(safe_file, os.path.basename(safe_file))
-            return {"success": True, "archive": safe_archive, "files": len(files)}
+                    compressed += 1
+            return {
+                "success": True,
+                "result": safe_archive,
+                "archive": safe_archive,
+                "files": compressed,
+                "meta": {
+                    "archive": safe_archive,
+                    "files": compressed,
+                    "include_dirs": include_dirs,
+                    "skipped": skipped,
+                },
+            }
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -91,8 +106,13 @@ class ArchiveToolsMixin:
                 zipf.extractall(safe_extract_to)
             return {
                 "success": True,
+                "result": safe_extract_to,
                 "extracted_to": safe_extract_to,
                 "archive": safe_archive,
+                "meta": {
+                    "archive": safe_archive,
+                    "extracted_to": safe_extract_to,
+                },
             }
         except Exception as e:
             return {"success": False, "error": str(e)}

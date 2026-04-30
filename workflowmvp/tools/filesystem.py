@@ -97,6 +97,25 @@ class FilesystemToolsMixin:
             },
         ))
         self.register_tool(Tool(
+            name="read_xlsx",
+            description="Read rows from an Excel .xlsx worksheet into a list of dictionaries.",
+            function=self._read_xlsx,
+            parameters={
+                "file_path": "Path to the .xlsx file",
+                "sheet": "Worksheet name to read (optional; defaults to active sheet)",
+            },
+        ))
+        self.register_tool(Tool(
+            name="write_xlsx",
+            description="Write a list of dictionaries to an Excel .xlsx worksheet.",
+            function=self._write_xlsx,
+            parameters={
+                "file_path": "Path to the output .xlsx file",
+                "data": "Data to write (list of dicts)",
+                "sheet": "Worksheet name (default: Sheet1)",
+            },
+        ))
+        self.register_tool(Tool(
             name="read_json",
             description=(
                 "Read a UTF-8 JSON file and parse it into Python objects "
@@ -192,7 +211,7 @@ class FilesystemToolsMixin:
                 item_path = os.path.join(safe_dir, item)
                 if os.path.isfile(item_path) and (pattern is None or pattern in item):
                     files.append(item)
-            return {"success": True, "files": files}
+            return {"success": True, "result": files, "files": files}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -200,7 +219,7 @@ class FilesystemToolsMixin:
         try:
             safe_dir = self._sandbox_path(directory)
             os.makedirs(safe_dir, exist_ok=True)
-            return {"success": True, "directory": safe_dir}
+            return {"success": True, "result": safe_dir, "directory": safe_dir}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -214,6 +233,7 @@ class FilesystemToolsMixin:
             shutil.copy2(safe_source, safe_destination)
             return {
                 "success": True,
+                "result": safe_destination,
                 "source": safe_source,
                 "destination": safe_destination,
             }
@@ -230,6 +250,7 @@ class FilesystemToolsMixin:
             shutil.move(safe_source, safe_destination)
             return {
                 "success": True,
+                "result": safe_destination,
                 "source": safe_source,
                 "destination": safe_destination,
             }
@@ -281,6 +302,96 @@ class FilesystemToolsMixin:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    def _read_xlsx(
+        self, file_path: str, sheet: Optional[str] = None
+    ) -> Dict[str, Any]:
+        try:
+            from openpyxl import load_workbook
+        except ImportError:
+            return {
+                "success": False,
+                "error": "openpyxl is not installed. Run: pip install openpyxl",
+            }
+        try:
+            safe_path = self._sandbox_path(file_path)
+            workbook = load_workbook(safe_path, read_only=True, data_only=True)
+            worksheet = workbook[sheet] if sheet else workbook.active
+            rows = list(worksheet.iter_rows(values_only=True))
+            if not rows:
+                data: List[Dict[str, Any]] = []
+                columns: List[str] = []
+            else:
+                columns = [
+                    str(value) if value is not None else f"column_{idx}"
+                    for idx, value in enumerate(rows[0], start=1)
+                ]
+                data = [
+                    dict(zip(columns, row, strict=False))
+                    for row in rows[1:]
+                ]
+            workbook.close()
+            return {
+                "success": True,
+                "result": data,
+                "data": data,
+                "rows": len(data),
+                "columns": columns,
+                "meta": {
+                    "file_path": safe_path,
+                    "sheet": worksheet.title,
+                    "rows": len(data),
+                    "columns": columns,
+                },
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def _write_xlsx(
+        self,
+        file_path: str,
+        data: List[Dict],
+        sheet: str = "Sheet1",
+    ) -> Dict[str, Any]:
+        try:
+            from openpyxl import Workbook
+        except ImportError:
+            return {
+                "success": False,
+                "error": "openpyxl is not installed. Run: pip install openpyxl",
+            }
+        try:
+            if not data:
+                return {"success": False, "error": "No data to write"}
+            columns = list(data[0].keys())
+            safe_path = self._sandbox_path(file_path)
+            parent = os.path.dirname(safe_path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+
+            workbook = Workbook()
+            worksheet = workbook.active
+            worksheet.title = sheet or "Sheet1"
+            worksheet.append(columns)
+            for row in data:
+                worksheet.append([row.get(column) for column in columns])
+            workbook.save(safe_path)
+
+            return {
+                "success": True,
+                "result": safe_path,
+                "file": safe_path,
+                "rows": len(data),
+                "columns": columns,
+                "meta": {
+                    "file_path": safe_path,
+                    "sheet": worksheet.title,
+                    "rows": len(data),
+                    "columns": columns,
+                },
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
     def _read_json(self, file_path: str, encoding: str = "utf-8") -> Dict[str, Any]:
         try:
             safe_path = self._sandbox_path(file_path)
@@ -288,7 +399,13 @@ class FilesystemToolsMixin:
                 raw = f.read()
             data = json.loads(raw)
             text = json.dumps(data, indent=2, ensure_ascii=False)
-            return {"success": True, "content": text, "data": data, "size": len(raw)}
+            return {
+                "success": True,
+                "result": data,
+                "content": text,
+                "data": data,
+                "size": len(raw),
+            }
         except Exception as e:
             return {"success": False, "error": str(e)}
 

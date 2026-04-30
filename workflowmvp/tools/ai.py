@@ -33,6 +33,7 @@ class AIToolsMixin:
                 "prompt": "Full instruction for the AI (e.g. 'Write a limerick about 5432.10')",
                 "max_tokens": "Maximum tokens to generate (default: 1000)",
             },
+            requires_credentials=("GEMINI_API_KEY",),
         ))
         self.register_tool(Tool(
             name="render_template",

@@ -11,6 +11,7 @@ const CREDS_KEY = "workflowmvp.credentials";
 const SAVED_WORKFLOWS_KEY = "workflowmvp.savedWorkflows";
 const CREDENTIAL_KEYS = [
     "GEMINI_API_KEY",
+    "GEMINI_MODEL",
     "EMAIL_USER",
     "EMAIL_PASSWORD",
     "EMAIL_FROM",
@@ -145,7 +146,7 @@ function buildToolCategoryOptions(tools) {
     if (!select) return;
     const categories = new Set(["all"]);
     for (const tool of tools) {
-        categories.add(toolCategory(tool.name));
+        categories.add(toolCategory(tool));
     }
     const ordered = Array.from(categories).sort();
     select.innerHTML = "";
@@ -168,7 +169,7 @@ function renderTools() {
         const params = Object.keys(tool.parameters || {}).join(" ").toLowerCase();
         const haystack = `${tool.name || ""} ${tool.description || ""} ${params}`.toLowerCase();
         const matchesSearch = !search || haystack.includes(search);
-        const matchesCategory = category === "all" || toolCategory(tool.name) === category;
+        const matchesCategory = category === "all" || toolCategory(tool) === category;
         return matchesSearch && matchesCategory;
     });
 
@@ -191,7 +192,11 @@ function renderTools() {
         `${filtered.length} / ${state.tools.length} tools`;
 }
 
-function toolCategory(name) {
+function toolCategory(tool) {
+    if (tool && typeof tool === "object" && tool.category) {
+        return String(tool.category);
+    }
+    const name = tool && typeof tool === "object" ? tool.name : tool;
     const n = String(name || "").toLowerCase();
     if (n === "generate_text") return "ai";
     if (n === "fetch_stock_price") return "finance";

@@ -19,6 +19,19 @@ import pytest
 from workflowmvp import video_to_workflow as vtw
 
 # ---------------------------------------------------------------------------
+# Prompt template
+# ---------------------------------------------------------------------------
+
+
+def test_video_workflow_prompt_loads_template() -> None:
+    prompt = vtw._video_workflow_prompt(3)
+
+    assert "3 screenshots" in prompt
+    assert "No frozen facts" in prompt
+    assert "{frame_count}" not in prompt
+
+
+# ---------------------------------------------------------------------------
 # API error paths
 # ---------------------------------------------------------------------------
 

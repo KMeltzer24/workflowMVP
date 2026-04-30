@@ -11,7 +11,7 @@ def test_tools_endpoint(client) -> None:
     payload = response.get_json()
     assert isinstance(payload, list)
     names = {tool["name"] for tool in payload}
-    assert len(payload) == len(names) == 29
+    assert len(payload) == len(names) == 34
     expected = {
         "append_file",
         "compress_files",
@@ -21,6 +21,7 @@ def test_tools_endpoint(client) -> None:
         "discover_urls",
         "download",
         "extract_archive",
+        "extract_regex",
         "fetch_stock_price",
         "generate_text",
         "get_current_time",
@@ -32,18 +33,34 @@ def test_tools_endpoint(client) -> None:
         "read_file",
         "read_json",
         "read_pdf",
+        "read_xlsx",
         "render_template",
+        "replace_text",
         "scrape_webpage",
         "send_email",
         "send_notification",
         "sqlite_insert",
         "sqlite_query",
+        "split_text",
         "wait",
         "write_csv",
         "write_file",
+        "write_xlsx",
         "write_json",
     }
     assert names == expected
+
+
+def test_tools_endpoint_includes_category(client) -> None:
+    response = client.get("/api/tools")
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert isinstance(payload, list)
+    assert payload
+
+    for tool in payload:
+        assert {"name", "description", "parameters", "category"}.issubset(tool)
+        assert tool["category"]
 
 
 def test_examples_endpoint_exposes_requirements(client) -> None:
@@ -139,6 +156,31 @@ def test_check_requirements_respects_provided_credentials(
     assert data["missing"] == []
 
 
+def test_generate_workflow_rejects_unknown_action_before_codegen(client) -> None:
+    response = client.post(
+        "/api/generate-workflow",
+        json={
+            "steps": [
+                {
+                    "step_id": "step_1",
+                    "description": "Do something impossible",
+                    "action": "invented_tool",
+                    "parameters": {},
+                    "dependencies": [],
+                }
+            ],
+            "credentials": {"GEMINI_API_KEY": "dummy-key"},
+        },
+    )
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload["success"] is False
+    assert payload["error"] == "Invalid workflow steps"
+    assert payload["validation_errors"]
+    assert payload["validation_errors"][0]["field"] == "action"
+
+
 def test_run_workflow_rejects_path_outside_generated_dir(client, tmp_path) -> None:
     bogus = tmp_path / "evil.py"
     bogus.write_text("print('hello')")
@@ -158,6 +200,38 @@ def test_run_workflow_missing_file_returns_error(client) -> None:
     )
     payload = response.get_json()
     assert payload["success"] is False
+
+
+def test_run_workflow_redacts_secret_from_stdout(
+    client, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import main as main_module
+    from workflowmvp.services import paths as services_paths
+
+    generated_dir = tmp_path / "generated_workflows"
+    generated_dir.mkdir()
+    temp_outputs_dir = tmp_path / "temp_outputs"
+    temp_outputs_dir.mkdir()
+    monkeypatch.setattr(main_module, "GENERATED_DIR", str(generated_dir))
+    monkeypatch.setattr(services_paths, "GENERATED_DIR", str(generated_dir))
+    monkeypatch.setattr(services_paths, "TEMP_OUTPUTS_DIR", str(temp_outputs_dir))
+
+    secret = "secret-token-12345"
+    script = generated_dir / "prints_secret.py"
+    script.write_text(f"print('token={secret}')\n")
+
+    response = client.post(
+        "/api/run-workflow",
+        json={
+            "workflow_path": str(script),
+            "credentials": {"GEMINI_API_KEY": secret},
+        },
+    )
+
+    payload = response.get_json()
+    assert payload["success"] is True
+    assert secret not in payload["stdout"]
+    assert "[REDACTED]" in payload["stdout"]
 
 
 # ---------------------------------------------------------------------------
@@ -214,6 +288,19 @@ def test_check_requirements_generate_text_satisfied_with_gemini_key(
     data = response.get_json()
     assert data["success"] is True
     assert data["missing"] == []
+
+
+def test_tool_metadata_exposes_credential_requirements() -> None:
+    from workflowmvp.tools import ToolRegistry
+
+    tools = {tool.name: tool for tool in ToolRegistry().list_tools()}
+
+    assert tools["generate_text"].requires_credentials == ("GEMINI_API_KEY",)
+    assert tools["send_email"].requires_credentials == (
+        "EMAIL_USER",
+        "EMAIL_PASSWORD",
+        "EMAIL_FROM",
+    )
 
 
 def test_validate_workflow_rejects_out_of_tree_path(client, tmp_path) -> None:
@@ -288,5 +375,3 @@ def test_validate_workflow_flags_syntax_errors(client, tmp_path, monkeypatch) ->
     assert payload["success"] is False
     assert payload["syntax_ok"] is False
     assert payload["syntax_error"] is not None
-
-

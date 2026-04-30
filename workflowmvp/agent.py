@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Tuple
 from .json_llm import extract_first_json_value
 from .llm import LLMClient, required_api_key_name
 from .parser import WorkflowStep
+from .services.tool_metadata import CATEGORY_LABELS, CATEGORY_ORDER, tool_category
 from .tool_contracts import (
     build_contract_prompt_guidance,
     build_retry_contract_guidance,
@@ -25,75 +26,6 @@ _CODE_GEN_RETRY_EXTRA_TOKENS = 4096
 # Token budget for parse-assist (shorter JSON output, less needed).
 _PARSE_ASSIST_MAX_TOKENS = 2000
 
-
-# Tool name -> category. Categories drive how the system prompt groups the
-# available-tools listing and which inline guidance blocks get included for
-# the steps the user actually asked for.
-_TOOL_CATEGORIES: Dict[str, str] = {
-    # filesystem & files
-    "read_file": "filesystem",
-    "write_file": "filesystem",
-    "append_file": "filesystem",
-    "list_files": "filesystem",
-    "create_directory": "filesystem",
-    "copy_file": "filesystem",
-    "move_file": "filesystem",
-    "delete_file": "filesystem",
-    "hash_file": "filesystem",
-    "read_csv": "filesystem",
-    "write_csv": "filesystem",
-    "read_json": "filesystem",
-    "write_json": "filesystem",
-    "read_pdf": "filesystem",
-    # archive
-    "compress_files": "archive",
-    "extract_archive": "archive",
-    # network
-    "download": "network",
-    "http_request": "network",
-    "scrape_webpage": "network",
-    "discover_urls": "network",
-    # finance
-    "fetch_stock_price": "finance",
-    # ai
-    "generate_text": "ai",
-    "render_template": "ai",
-    # time
-    "wait": "time",
-    "get_current_time": "time",
-    # comms
-    "send_email": "comms",
-    "send_notification": "comms",
-    # system
-    "run_command": "system",
-    # database
-    "sqlite_query": "database",
-    "sqlite_insert": "database",
-}
-
-_CATEGORY_ORDER = (
-    "filesystem",
-    "archive",
-    "network",
-    "finance",
-    "ai",
-    "time",
-    "comms",
-    "system",
-    "database",
-)
-
-_CATEGORY_LABELS: Dict[str, str] = {
-    "filesystem": "Files & I/O",
-    "archive": "Archive",
-    "network": "Network & Web",
-    "finance": "Finance",
-    "ai": "AI & Templating",
-    "time": "Time",
-    "comms": "Communications",
-    "system": "System",
-    "database": "Database",
-}
 
 # Per-tool guidance snippets. Only the entries whose key (a tool name OR a
 # category) appears in the workflow are emitted in the system prompt. This
@@ -456,7 +388,7 @@ Rule-parser draft (for reference):
         """
         by_category: Dict[str, List[str]] = {}
         for tool in self.tool_registry.list_tools():
-            category = _TOOL_CATEGORIES.get(tool.name, "system")
+            category = tool_category(tool.name)
             line = (
                 f"- {tool.name}: {tool.description}\n"
                 f"  Parameters: {', '.join(tool.parameters.keys())}"
@@ -464,17 +396,17 @@ Rule-parser draft (for reference):
             by_category.setdefault(category, []).append(line)
 
         sections: List[str] = []
-        for category in _CATEGORY_ORDER:
+        for category in CATEGORY_ORDER:
             entries = by_category.get(category)
             if not entries:
                 continue
-            label = _CATEGORY_LABELS.get(category, category.title())
+            label = CATEGORY_LABELS.get(category, category.title())
             sections.append(f"### {label}\n" + "\n".join(entries))
         # Append any unrecognised categories at the end (defensive).
         for category, entries in by_category.items():
-            if category in _CATEGORY_ORDER:
+            if category in CATEGORY_ORDER:
                 continue
-            label = _CATEGORY_LABELS.get(category, category.title())
+            label = CATEGORY_LABELS.get(category, category.title())
             sections.append(f"### {label}\n" + "\n".join(entries))
         return "\n\n".join(sections)
 

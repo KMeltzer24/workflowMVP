@@ -46,13 +46,21 @@ class FinanceToolsMixin:
             info = t.fast_info
             currency = getattr(info, "currency", "USD") or "USD"
             name = getattr(info, "long_name", ticker) or ticker
+            price = round(float(latest), 2)
             return {
                 "success": True,
+                "result": price,
                 "ticker": ticker,
                 "name": name,
-                "price": round(float(latest), 2),
+                "price": price,
                 "currency": currency,
                 "period": period,
+                "meta": {
+                    "ticker": ticker,
+                    "name": name,
+                    "currency": currency,
+                    "period": period,
+                },
             }
         except Exception as exc:
             return {"success": False, "error": str(exc)}

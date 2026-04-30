@@ -17,7 +17,7 @@ import json
 import os
 import sys
 from collections.abc import Iterable
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from flask import Response, stream_with_context
 
@@ -30,6 +30,15 @@ from . import paths as _paths
 _RLIMIT_CPU_SECONDS = int(os.getenv("WORKFLOW_RLIMIT_CPU", "120"))
 _RLIMIT_AS_BYTES = int(os.getenv("WORKFLOW_RLIMIT_AS_MB", "1024")) * 1024 * 1024
 _RLIMIT_FSIZE_BYTES = int(os.getenv("WORKFLOW_RLIMIT_FSIZE_MB", "100")) * 1024 * 1024
+
+SECRET_ENV_KEYS = {
+    "GEMINI_API_KEY",
+    "EMAIL_PASSWORD",
+    "EMAIL_USER",
+    "EMAIL_FROM",
+    "SMTP_SERVER",
+}
+_MIN_SECRET_LENGTH = 8
 
 
 def apply_workflow_rlimits() -> None:
@@ -81,6 +90,32 @@ def build_run_env(creds: Dict[str, str]) -> Dict[str, str]:
     )
     env.update(creds)
     return env
+
+
+def secret_values_from_env(env: Dict[str, str]) -> list[str]:
+    """Return non-empty, long-enough secret values from an environment dict."""
+    values: set[str] = set()
+    for key in SECRET_ENV_KEYS:
+        raw = env.get(key)
+        if raw is None:
+            continue
+        value = str(raw)
+        if len(value) >= _MIN_SECRET_LENGTH:
+            values.add(value)
+    return sorted(values, key=len, reverse=True)
+
+
+def build_redactor(env: Dict[str, str]) -> Callable[[object], str]:
+    """Build a function that redacts known secret values from text."""
+    secret_values = secret_values_from_env(env)
+
+    def redact(text: object) -> str:
+        redacted = str(text)
+        for value in secret_values:
+            redacted = redacted.replace(value, "[REDACTED]")
+        return redacted
+
+    return redact
 
 
 def ensure_run_dir(run_id: str) -> str:

@@ -36,6 +36,7 @@ class NotificationToolsMixin:
                 "email_password": "SMTP password / app password (default: env EMAIL_PASSWORD)",
                 "email_from": "From address (default: env EMAIL_FROM or email_user)",
             },
+            requires_credentials=("EMAIL_USER", "EMAIL_PASSWORD", "EMAIL_FROM"),
         ))
         self.register_tool(Tool(
             name="send_notification",
@@ -161,7 +162,16 @@ class NotificationToolsMixin:
 
             return {
                 "success": True,
+                "result": f"Email sent successfully to {recipient}",
                 "message": f"Email sent successfully to {recipient}",
+                "meta": {
+                    "recipient": recipient,
+                    "subject": subject,
+                    "attachments": attach_paths,
+                    "smtp_server": smtp_server,
+                    "smtp_port": smtp_port,
+                    "email_from": email_from,
+                },
             }
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -225,7 +235,19 @@ class NotificationToolsMixin:
                             text=True,
                         )
                         if proc2.returncode == 0:
-                            return {"success": True, "title": title_s, "message": message_s}
+                            return {
+                                "success": True,
+                                "result": message_s,
+                                "title": title_s,
+                                "message": message_s,
+                                "meta": {
+                                    "title": title_s,
+                                    "message": message_s,
+                                    "urgency": urgency,
+                                    "platform": "darwin",
+                                    "notifier": "terminal-notifier",
+                                },
+                            }
                     err = (proc.stderr or proc.stdout or "").strip() or f"osascript exit {proc.returncode}"
                     return {
                         "success": False,
@@ -250,11 +272,38 @@ class NotificationToolsMixin:
                 else:
                     return {
                         "success": True,
+                        "result": message_s,
                         "title": title_s,
                         "message": message_s,
                         "note": "notify-send not available; notification skipped",
+                        "meta": {
+                            "title": title_s,
+                            "message": message_s,
+                            "urgency": urgency,
+                            "platform": sys.platform,
+                            "notifier": None,
+                            "skipped": True,
+                        },
                     }
 
-            return {"success": True, "title": title_s, "message": message_s}
+            return {
+                "success": True,
+                "result": message_s,
+                "title": title_s,
+                "message": message_s,
+                "meta": {
+                    "title": title_s,
+                    "message": message_s,
+                    "urgency": urgency,
+                    "platform": sys.platform,
+                    "notifier": (
+                        "powershell"
+                        if os.name == "nt"
+                        else "osascript"
+                        if sys.platform == "darwin"
+                        else "notify-send"
+                    ),
+                },
+            }
         except Exception as e:
             return {"success": False, "error": str(e)}

@@ -20,10 +20,10 @@ help:
 	@echo "Override port: make run PORT=5001"
 
 install:
-	$(PYTHON) -m pip install -r requirements.txt
+	$(PYTHON) -m pip install .
 
 dev:
-	$(PYTHON) -m pip install -r requirements-dev.txt
+	$(PYTHON) -m pip install ".[dev]"
 
 run:
 	GEMINI_MODEL="$(GEMINI_MODEL)" $(PYTHON) main.py --port $(PORT)

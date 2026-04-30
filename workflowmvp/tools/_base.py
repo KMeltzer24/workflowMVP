@@ -13,12 +13,15 @@ implementations and a ``_register_<category>_tools`` hook that the concrete
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import re
+import socket
 import time
 import warnings
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
+from urllib.parse import urlparse
 
 # macOS system Python is commonly linked against LibreSSL, which triggers a
 # noisy urllib3 warning on import. Silence only that exact warning.
@@ -33,6 +36,8 @@ import requests  # noqa: E402
 # blackhole TCP (no RST), connect can burn the full budget per attempt × retries (~90s for
 # ``timeout=30``, ``attempts=3``). Use a short connect phase by default; override via env.
 _HTTP_CONNECT_TIMEOUT = float(os.getenv("WORKFLOW_HTTP_CONNECT_TIMEOUT", "8"))
+_BLOCKED_HOSTNAMES = {"localhost"}
+_BLOCKED_METADATA_IPS = {"169.254.169.254"}
 
 TimeoutLike = int | float | tuple[float, float]
 
@@ -63,6 +68,53 @@ def _http_error_unlikely_to_recover(exc: BaseException) -> bool:
     )
 
 
+def _is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """True when an address is not safe for generated-workflow egress."""
+    return (
+        str(ip) in _BLOCKED_METADATA_IPS
+        or ip.is_loopback
+        or ip.is_private
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_unspecified
+        or ip.is_reserved
+    )
+
+
+def _validate_public_http_url(url: str) -> None:
+    """Reject non-HTTP(S), localhost, and private/internal network targets."""
+    parsed = urlparse(str(url or ""))
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("URL must use http or https")
+
+    hostname = (parsed.hostname or "").rstrip(".").lower()
+    if not hostname:
+        raise ValueError("URL must include a hostname")
+    if hostname in _BLOCKED_HOSTNAMES or hostname.endswith(".localhost"):
+        raise ValueError("URL host is blocked by network safety policy")
+
+    try:
+        addr_info = socket.getaddrinfo(hostname, None, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise ValueError(f"Could not resolve URL host: {hostname}") from exc
+
+    resolved: set[str] = set()
+    for family, _type, _proto, _canonname, sockaddr in addr_info:
+        raw_ip = sockaddr[0]
+        if family == socket.AF_INET6:
+            raw_ip = raw_ip.split("%", 1)[0]
+        try:
+            ip = ipaddress.ip_address(raw_ip)
+        except ValueError:
+            continue
+        resolved.add(str(ip))
+        if _is_blocked_ip(ip):
+            raise ValueError("URL resolves to a blocked network address")
+
+    if not resolved:
+        raise ValueError(f"Could not resolve URL host to an IP address: {hostname}")
+
+
 @dataclass
 class Tool:
     """Represents a workflow tool exposed to generated scripts."""
@@ -71,6 +123,10 @@ class Tool:
     description: str
     function: Callable
     parameters: Dict[str, str]
+    category: str = "general"
+    side_effects: tuple[str, ...] = ()
+    requires_credentials: tuple[str, ...] = ()
+    safety_level: str = "safe"
 
 
 class _BaseToolRegistry:
@@ -119,6 +175,10 @@ class _BaseToolRegistry:
             description=tool.description,
             function=self._wrap_tool_function(tool.name, tool.function),
             parameters=tool.parameters,
+            category=tool.category,
+            side_effects=tool.side_effects,
+            requires_credentials=tool.requires_credentials,
+            safety_level=tool.safety_level,
         )
 
     def get_tool(self, name: str) -> Optional[Tool]:
@@ -150,27 +210,63 @@ class _BaseToolRegistry:
             payload = {"success": True, "result": payload}
 
         normalized = dict(payload)
-        success = bool(normalized.get("success"))
+        if "success" in normalized:
+            success = bool(normalized["success"])
+        else:
+            success = not normalized.get("error")
         normalized["success"] = success
 
         if success:
-            inferred_result = (
-                normalized.get("result")
-                if "result" in normalized
-                else normalized.get("content")
-                if "content" in normalized
-                else normalized.get("message")
-            )
+            inferred_result = normalized.get("result")
+            if "result" not in normalized:
+                for key in (
+                    "content",
+                    "data",
+                    "text",
+                    "results",
+                    "hex_digest",
+                    "message",
+                    "file",
+                    "archive",
+                    "extracted_to",
+                    "price",
+                    "stdout",
+                ):
+                    if key in normalized:
+                        inferred_result = normalized[key]
+                        break
             normalized["result"] = inferred_result
             normalized["error"] = None
         else:
-            normalized["result"] = normalized.get("result")
+            normalized["result"] = normalized.get("result", None)
             normalized["error"] = str(normalized.get("error") or "Unknown tool error")
 
         meta = normalized.get("meta")
         if not isinstance(meta, dict):
             meta = {}
         meta.setdefault("tool", tool_name)
+        for key in (
+            "file",
+            "file_path",
+            "directory",
+            "source",
+            "destination",
+            "size",
+            "rows",
+            "columns",
+            "pages_read",
+            "total_pages",
+            "status_code",
+            "url",
+            "count",
+            "archive",
+            "extracted_to",
+            "ticker",
+            "currency",
+            "period",
+        ):
+            if key in normalized:
+                meta.setdefault(key, normalized[key])
         normalized["meta"] = meta
 
         return normalized
@@ -187,6 +283,7 @@ class _BaseToolRegistry:
         headers: Optional[Dict[str, str]] = None,
     ) -> requests.Response:
         """GET ``url`` with exponential backoff for transient request failures."""
+        _validate_public_http_url(url)
         merged_headers = {**cls._BROWSER_HEADERS, **(headers or {})}
         timeout_pair = _http_timeout_pair(timeout)
         last_exc: Optional[Exception] = None

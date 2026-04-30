@@ -6,6 +6,8 @@ import os
 from collections.abc import Iterable
 from typing import Any, Callable, Dict, List
 
+from workflowmvp.tools import ToolRegistry
+
 # Mapping of workflow actions -> env var keys they require. Used by
 # /api/check-requirements to tell the UI which creds are missing before a run.
 #
@@ -28,8 +30,6 @@ ACTION_REQUIREMENTS: Dict[str, ActionRequirement] = {
         "EMAIL_FROM",
     ],
     "generate_text": _generate_text_requirements,
-    "generate_haiku": _generate_text_requirements,
-    "generate_poem": _generate_text_requirements,
 }
 
 
@@ -46,13 +46,21 @@ def missing_requirements(
 ) -> List[str]:
     """Return env var keys the run will need but which aren't yet set."""
     effective: Dict[str, str] = {**os.environ, **creds}
+    tools = {tool.name: tool for tool in ToolRegistry().list_tools()}
     needed: set[str] = set()
     for step in steps:
         action = step.get("action") if isinstance(step, dict) else None
+        tool = tools.get(action or "")
+        metadata_requirements = list(tool.requires_credentials) if tool else []
         requirement = ACTION_REQUIREMENTS.get(action or "")
-        if requirement is None:
-            continue
-        for key in resolve_requirement(requirement, effective):
+        required_keys = (
+            metadata_requirements
+            if metadata_requirements
+            else resolve_requirement(requirement, effective)
+            if requirement is not None
+            else []
+        )
+        for key in required_keys:
             needed.add(key)
     return sorted(key for key in needed if not effective.get(key))
 

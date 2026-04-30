@@ -24,6 +24,7 @@ import tempfile
 import time
 import uuid
 import warnings
+from importlib.resources import files
 from queue import Empty, Queue
 from threading import Thread
 from typing import Any, Dict, Optional
@@ -75,6 +76,7 @@ from workflowmvp.services.paths import (  # noqa: E402
     TEMP_OUTPUTS_DIR,
 )
 from workflowmvp.services.runner import (  # noqa: E402
+    build_redactor,
     build_run_env,
     encode_sse,
     ensure_run_dir,
@@ -86,6 +88,8 @@ from workflowmvp.services.static_analysis import (  # noqa: E402
     extract_tools_from_source,
     extract_top_level_imports,
 )
+from workflowmvp.services.tool_metadata import tool_category  # noqa: E402
+from workflowmvp.services.workflow_validation import validate_workflow_steps  # noqa: E402
 from workflowmvp.tools import ToolRegistry  # noqa: E402
 
 load_dotenv()
@@ -97,7 +101,12 @@ def cleanup_files(verbose: bool = True) -> int:
     return _services_cleanup_files(verbose=verbose)
 
 
-app = Flask(__name__, template_folder="web/templates", static_folder="web/static")
+WEB_DIR = files("web")
+app = Flask(
+    __name__,
+    template_folder=str(WEB_DIR / "templates"),
+    static_folder=str(WEB_DIR / "static"),
+)
 
 # Cap upload size at 100 MB. Video parsing is the only large-payload
 # endpoint and 100 MB comfortably fits a 30-second 1080p screen recording.
@@ -249,6 +258,7 @@ def get_tools():
                 "name": tool.name,
                 "description": tool.description,
                 "parameters": tool.parameters,
+                "category": tool_category(tool.name),
             }
             for tool in registry.list_tools()
         ]
@@ -427,16 +437,24 @@ def generate_workflow():
 
         model = resolve_gemini_model(creds)
 
-        steps = [
-            WorkflowStep(
-                step_id=step["step_id"],
-                description=step["description"],
-                action=step["action"],
-                parameters=step["parameters"],
-                dependencies=step["dependencies"],
+        validation = validate_workflow_steps(steps_data)
+        validation_warnings = [issue.to_dict() for issue in validation.warnings]
+        if not validation.valid:
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": "Invalid workflow steps",
+                        "validation_errors": [
+                            issue.to_dict() for issue in validation.errors
+                        ],
+                        "validation_warnings": validation_warnings,
+                    }
+                ),
+                400,
             )
-            for step in steps_data
-        ]
+
+        steps = validation.steps
 
         os.makedirs(GENERATED_DIR, exist_ok=True)
         timestamp = int(time.time())
@@ -454,6 +472,7 @@ def generate_workflow():
                 "output_path": os.path.relpath(output_path, PROJECT_ROOT),
                 "message": "Workflow generated successfully",
                 "generation_seconds": generation_seconds,
+                "validation_warnings": validation_warnings,
             }
         )
     except Exception as exc:
@@ -500,6 +519,7 @@ def run_workflow():
     env = build_run_env(creds)
     env["WORKFLOW_RUN_ID"] = run_id
     env["WORKFLOW_OUTPUT_DIR"] = run_dir
+    redact = build_redactor(env)
 
     try:
         result = subprocess.run(
@@ -514,16 +534,16 @@ def run_workflow():
         return jsonify(
             {
                 "success": result.returncode == 0,
-                "stdout": result.stdout,
-                "stderr": result.stderr,
+                "stdout": redact(result.stdout),
+                "stderr": redact(result.stderr),
                 "returncode": result.returncode,
                 "run_id": run_id,
             }
         )
     except subprocess.TimeoutExpired:
-        return jsonify({"success": False, "error": "Workflow timed out"})
+        return jsonify({"success": False, "error": redact("Workflow timed out")})
     except Exception as exc:
-        return jsonify({"success": False, "error": str(exc)})
+        return jsonify({"success": False, "error": redact(str(exc))})
 
 
 @app.route("/api/run-workflow/stream", methods=["POST"])
@@ -543,6 +563,7 @@ def run_workflow_stream():
     env["WORKFLOW_RUN_ID"] = run_id
     env["WORKFLOW_OUTPUT_DIR"] = run_dir
     env["PYTHONUNBUFFERED"] = "1"
+    redact = build_redactor(env)
 
     def generate():
         yield encode_sse("status", {"message": "starting", "run_id": run_id})
@@ -577,7 +598,7 @@ def run_workflow_stream():
                 if time.monotonic() - start > timeout_seconds:
                     timed_out = True
                     proc.kill()
-                    yield encode_sse("error", {"message": "Workflow timed out"})
+                    yield encode_sse("error", {"message": redact("Workflow timed out")})
                     break
                 try:
                     line = line_queue.get(timeout=0.25)
@@ -585,7 +606,7 @@ def run_workflow_stream():
                     continue
                 if line is None:
                     break
-                yield encode_sse("log", {"line": line.rstrip("\n")})
+                yield encode_sse("log", {"line": redact(line.rstrip("\n"))})
 
             if timed_out:
                 return
@@ -601,9 +622,9 @@ def run_workflow_stream():
             )
         except subprocess.TimeoutExpired:
             proc.kill()
-            yield encode_sse("error", {"message": "Workflow timed out"})
+            yield encode_sse("error", {"message": redact("Workflow timed out")})
         except Exception as exc:  # pragma: no cover - defensive
-            yield encode_sse("error", {"message": str(exc)})
+            yield encode_sse("error", {"message": redact(str(exc))})
 
     return Response(
         stream_with_context(generate()),

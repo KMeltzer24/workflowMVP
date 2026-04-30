@@ -10,7 +10,7 @@ from urllib.parse import urldefrag, urljoin, urlparse, urlunparse
 
 import requests
 
-from ._base import Tool
+from ._base import Tool, _validate_public_http_url
 
 
 class NetworkToolsMixin:
@@ -56,7 +56,11 @@ class NetworkToolsMixin:
                 "with a 'url' key (the whole entry is accepted for convenience)."
             ),
             function=self._scrape_webpage,
-            parameters={"url": "URL string, or {'url': 'https://...', 'score': n} from discover_urls"},
+            parameters={
+                "url": "URL string, or {'url': 'https://...', 'score': n} from discover_urls",
+                "selector": "Optional CSS selector for targeted extraction",
+                "extract_text": "Whether to return visible text instead of raw HTML (default: True)",
+            },
         ))
         self.register_tool(Tool(
             name="discover_urls",
@@ -111,6 +115,7 @@ class NetworkToolsMixin:
             method = method.upper()
             if method not in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"}:
                 return {"success": False, "error": f"Unsupported HTTP method: {method}"}
+            _validate_public_http_url(url)
 
             req_headers = {**self._BROWSER_HEADERS, **(headers or {})}
             kwargs: Dict[str, Any] = {"timeout": timeout, "headers": req_headers}
@@ -135,6 +140,12 @@ class NetworkToolsMixin:
                 "status_code": response.status_code,
                 "result": result,
                 "error": None if response.ok else f"HTTP {response.status_code}: {response.reason}",
+                "meta": {
+                    "status_code": response.status_code,
+                    "url": url,
+                    "method": method,
+                    "headers": dict(response.headers),
+                },
             }
         except Exception as exc:
             return {"success": False, "error": str(exc)}
@@ -178,6 +189,16 @@ class NetworkToolsMixin:
                 from bs4 import BeautifulSoup
 
                 soup = BeautifulSoup(raw_html, "html.parser")
+                selected = soup.select(selector) if selector else [soup]
+                if selector and not selected:
+                    return {
+                        "success": False,
+                        "error": f"No elements matched selector: {selector}",
+                    }
+                soup = BeautifulSoup(
+                    "\n".join(str(node) for node in selected),
+                    "html.parser",
+                )
                 for tag in soup(
                     [
                         "script", "style", "nav", "header", "footer",
@@ -185,16 +206,30 @@ class NetworkToolsMixin:
                     ]
                 ):
                     tag.decompose()
-                text = soup.get_text(separator="\n")
-                text = "\n".join(
-                    line.strip() for line in text.splitlines() if line.strip()
-                )
+                if extract_text:
+                    text = soup.get_text(separator="\n")
+                    text = "\n".join(
+                        line.strip() for line in text.splitlines() if line.strip()
+                    )
+                else:
+                    text = str(soup)
             except ImportError:
-                text = raw_html
+                text = raw_html if not selector or not extract_text else raw_html
 
             truncated = len(text) > self._SCRAPE_MAX_CHARS
             content = text[: self._SCRAPE_MAX_CHARS] if truncated else text
-            result: Dict[str, Any] = {"success": True, "content": content, "url": resolved}
+            result: Dict[str, Any] = {
+                "success": True,
+                "content": content,
+                "url": resolved,
+                "meta": {
+                    "url": resolved,
+                    "selector": selector,
+                    "extract_text": extract_text,
+                    "truncated": truncated,
+                    "content_length": len(text),
+                },
+            }
             if truncated:
                 result["note"] = (
                     f"Content truncated to {self._SCRAPE_MAX_CHARS} chars "
