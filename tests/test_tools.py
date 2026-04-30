@@ -7,13 +7,16 @@ error when credentials aren't available.
 
 from __future__ import annotations
 
+import socket
 import zipfile
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
 
+from workflowmvp.tool_contracts import build_contract_prompt_guidance, validate_tool_contracts
 from workflowmvp.tools import ToolRegistry
 
 
@@ -30,7 +33,104 @@ def test_read_write_json_roundtrip(registry: ToolRegistry, tmp_path: Path) -> No
     assert w["success"] is True
     r = registry.get_tool("read_json").function(file_path=str(path))
     assert r["success"] is True
+    assert r["result"] == {"a": 1, "b": [2, 3]}
     assert r["data"] == {"a": 1, "b": [2, 3]}
+
+
+def test_read_xlsx_reads_rows_as_dicts(registry: ToolRegistry, tmp_path: Path) -> None:
+    from openpyxl import Workbook
+
+    path = tmp_path / "users.xlsx"
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Users"
+    worksheet.append(["name", "age"])
+    worksheet.append(["Alice", 30])
+    worksheet.append(["Bob", 25])
+    workbook.save(path)
+
+    result = registry.get_tool("read_xlsx").function(
+        file_path=str(path),
+        sheet="Users",
+    )
+
+    assert result["success"] is True
+    assert result["result"] == [
+        {"name": "Alice", "age": 30},
+        {"name": "Bob", "age": 25},
+    ]
+    assert result["data"] == result["result"]
+    assert result["meta"]["sheet"] == "Users"
+    assert result["meta"]["rows"] == 2
+    assert result["meta"]["columns"] == ["name", "age"]
+
+
+def test_write_xlsx_writes_rows_from_dicts(registry: ToolRegistry, tmp_path: Path) -> None:
+    path = tmp_path / "users.xlsx"
+
+    result = registry.get_tool("write_xlsx").function(
+        file_path=str(path),
+        data=[
+            {"name": "Alice", "age": 30},
+            {"name": "Bob", "age": 25},
+        ],
+        sheet="Users",
+    )
+
+    assert result["success"] is True
+    assert result["result"] == str(path)
+    assert result["file"] == str(path)
+    assert result["meta"]["sheet"] == "Users"
+    assert result["meta"]["rows"] == 2
+    assert result["meta"]["columns"] == ["name", "age"]
+
+    read_back = registry.get_tool("read_xlsx").function(
+        file_path=str(path),
+        sheet="Users",
+    )
+    assert read_back["success"] is True
+    assert read_back["result"] == [
+        {"name": "Alice", "age": 30},
+        {"name": "Bob", "age": 25},
+    ]
+
+
+def test_extract_regex_returns_matches(registry: ToolRegistry) -> None:
+    result = registry.get_tool("extract_regex").function(
+        text="Order A-123 and B-456",
+        pattern=r"([A-Z])-(\d+)",
+        group=2,
+    )
+
+    assert result["success"] is True
+    assert result["result"] == ["123", "456"]
+    assert result["matches"] == result["result"]
+    assert result["meta"]["count"] == 2
+
+
+def test_replace_text_returns_replaced_text(registry: ToolRegistry) -> None:
+    result = registry.get_tool("replace_text").function(
+        text="red blue red",
+        old="red",
+        new="green",
+        count=1,
+    )
+
+    assert result["success"] is True
+    assert result["result"] == "green blue red"
+    assert result["text"] == result["result"]
+
+
+def test_split_text_returns_parts(registry: ToolRegistry) -> None:
+    result = registry.get_tool("split_text").function(
+        text="alpha,beta,gamma",
+        delimiter=",",
+    )
+
+    assert result["success"] is True
+    assert result["result"] == ["alpha", "beta", "gamma"]
+    assert result["parts"] == result["result"]
+    assert result["meta"]["count"] == 3
 
 
 def test_append_file(registry: ToolRegistry, tmp_path: Path) -> None:
@@ -105,6 +205,28 @@ def test_compress_and_extract_roundtrip(registry: ToolRegistry, tmp_path: Path) 
     assert (extract_dir / "a.txt").read_text() == "one"
 
 
+def test_compress_files_reports_actual_count_and_skipped_files(
+    registry: ToolRegistry, tmp_path: Path
+) -> None:
+    existing = tmp_path / "exists.txt"
+    missing = tmp_path / "missing.txt"
+    existing.write_text("one")
+
+    archive = tmp_path / "pack.zip"
+    result = registry.get_tool("compress_files").function(
+        files=[str(existing), str(missing)],
+        archive_path=str(archive),
+        include_dirs=False,
+    )
+
+    assert result["success"] is True
+    assert result["files"] == 1
+    assert result["meta"]["files"] == 1
+    assert result["meta"]["skipped"] == [str(missing)]
+    with zipfile.ZipFile(archive) as zf:
+        assert zf.namelist() == ["exists.txt"]
+
+
 def test_send_email_returns_structured_error_without_creds(
     registry: ToolRegistry, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -148,11 +270,20 @@ def test_download_uses_requests(registry: ToolRegistry, monkeypatch: pytest.Monk
         def raise_for_status(self) -> None:
             return None
 
-    def fake_get(url: str, timeout: int = 30, **_: object) -> FakeResponse:
+    def fake_get(url: str, timeout: object = 30, **_: object) -> FakeResponse:
         assert url.startswith("http")
-        assert timeout >= 1
+        if isinstance(timeout, tuple):
+            assert timeout[0] >= 1 and timeout[1] >= 1
+        else:
+            assert float(timeout) >= 1
         return FakeResponse()
 
+    monkeypatch.setattr(
+        "workflowmvp.tools._base.socket.getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))
+        ],
+    )
     monkeypatch.setattr("workflowmvp.tools.requests.get", fake_get)
     result = registry.get_tool("download").function(url="https://example.com")
     assert result["success"] is True
@@ -174,16 +305,84 @@ def test_download_retries_transient_failures(
         def raise_for_status(self) -> None:
             return None
 
-    def flaky_get(url: str, timeout: int = 30, **_: object):  # type: ignore[no-untyped-def]
+    def flaky_get(url: str, timeout: object = 30, **_: object):  # type: ignore[no-untyped-def]
         calls["count"] += 1
         if calls["count"] < 3:
             raise requests.RequestException("transient")
         return FakeResponse()
 
+    monkeypatch.setattr(
+        "workflowmvp.tools._base.socket.getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))
+        ],
+    )
     monkeypatch.setattr("workflowmvp.tools.requests.get", flaky_get)
     result = registry.get_tool("download").function(url="https://example.com")
     assert result["success"] is True
     assert calls["count"] == 3
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "file:///etc/passwd",
+        "http://localhost:5050",
+        "http://127.0.0.1:5050",
+        "http://169.254.169.254/latest/meta-data",
+        "http://10.0.0.1",
+    ],
+)
+def test_download_rejects_internal_or_non_http_urls(
+    registry: ToolRegistry, url: str
+) -> None:
+    result = registry.get_tool("download").function(url=url)
+
+    assert result["success"] is False
+    assert result["error"]
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "file:///etc/passwd",
+        "http://localhost:5050",
+        "http://169.254.169.254/latest/meta-data",
+    ],
+)
+def test_http_request_rejects_internal_or_non_http_urls(
+    registry: ToolRegistry, url: str
+) -> None:
+    result = registry.get_tool("http_request").function(url=url)
+
+    assert result["success"] is False
+    assert result["error"]
+
+
+def test_http_request_allows_public_url_with_mocked_request(
+    registry: ToolRegistry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mock_response = MagicMock()
+    mock_response.ok = True
+    mock_response.status_code = 200
+    mock_response.reason = "OK"
+    mock_response.headers = {"Content-Type": "text/plain"}
+    mock_response.text = "ok"
+
+    req = MagicMock(return_value=mock_response)
+    monkeypatch.setattr(
+        "workflowmvp.tools._base.socket.getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))
+        ],
+    )
+    monkeypatch.setattr("workflowmvp.tools.network.requests.request", req)
+
+    result = registry.get_tool("http_request").function(url="https://example.com")
+
+    assert result["success"] is True
+    assert result["result"] == "ok"
+    req.assert_called_once()
 
 
 def test_standardized_response_envelope(registry: ToolRegistry, tmp_path: Path) -> None:
@@ -196,6 +395,52 @@ def test_standardized_response_envelope(registry: ToolRegistry, tmp_path: Path) 
     assert "error" in result
     assert "meta" in result
     assert result["meta"]["tool"] == "write_file"
+
+
+def test_harmless_tools_return_standardized_response_envelope(
+    registry: ToolRegistry, tmp_path: Path
+) -> None:
+    text_path = tmp_path / "note.txt"
+    json_path = tmp_path / "data.json"
+    hash_path = tmp_path / "blob.txt"
+    hash_path.write_text("hello", encoding="utf-8")
+
+    responses = [
+        registry.get_tool("write_file").function(
+            file_path=str(text_path),
+            content="hello",
+        ),
+        registry.get_tool("read_file").function(file_path=str(text_path)),
+        registry.get_tool("write_json").function(
+            file_path=str(json_path),
+            data={"ok": True},
+        ),
+        registry.get_tool("read_json").function(file_path=str(json_path)),
+        registry.get_tool("hash_file").function(file_path=str(hash_path)),
+        registry.get_tool("get_current_time").function(timezone="UTC"),
+        registry.get_tool("render_template").function(
+            template="Hello {{ name }}",
+            variables={"name": "Kevin"},
+            autoescape=False,
+        ),
+    ]
+
+    for response in responses:
+        assert set(response) >= {"success", "result", "error", "meta"}
+        assert isinstance(response["success"], bool)
+        assert response["error"] is None
+        assert isinstance(response["meta"], dict)
+        assert response["meta"]["tool"]
+
+
+def test_registered_tools_expose_basic_contract_metadata(registry: ToolRegistry) -> None:
+    tools = registry.list_tools()
+    assert tools
+
+    for tool in tools:
+        assert tool.name
+        assert tool.description
+        assert isinstance(tool.parameters, dict)
 
 
 def test_list_files_filters_by_pattern(registry: ToolRegistry, tmp_path: Path) -> None:
@@ -399,6 +644,100 @@ def test_read_pdf_invalid_pages_returns_error(registry: ToolRegistry, tmp_path: 
     assert "no valid pages" in result["error"].lower()
 
 
+def test_scrape_webpage_accepts_discover_urls_row_dict(registry: ToolRegistry) -> None:
+    """Passing a discover_urls entry dict should resolve the string URL (common codegen mistake)."""
+    html = "<html><body><p>Hello dresser plans</p></body></html>"
+    mock_resp = MagicMock()
+    mock_resp.text = html
+
+    row = {"url": "https://example.org/plans", "score": 2}
+    with patch.object(ToolRegistry, "_request_with_retry", return_value=mock_resp) as req:
+        out = registry.get_tool("scrape_webpage").function(url=row)
+    assert out["success"] is True
+    assert "dresser" in (out.get("result") or "") or "Hello" in (out.get("result") or "")
+    req.assert_called_once()
+    assert req.call_args[0][0] == "https://example.org/plans"
+    assert out.get("url") == "https://example.org/plans"
+
+
+def test_scrape_webpage_honors_selector_and_extract_text(registry: ToolRegistry) -> None:
+    html = """
+    <html><body>
+      <main><p>Keep this text</p></main>
+      <aside>Ignore this text</aside>
+    </body></html>
+    """
+    mock_resp = MagicMock()
+    mock_resp.text = html
+
+    with patch.object(ToolRegistry, "_request_with_retry", return_value=mock_resp):
+        out = registry.get_tool("scrape_webpage").function(
+            url="https://example.org/page",
+            selector="main",
+            extract_text=True,
+        )
+
+    assert out["success"] is True
+    assert "Keep this text" in out["result"]
+    assert "Ignore this text" not in out["result"]
+    assert out["meta"]["selector"] == "main"
+
+
+def test_scrape_webpage_returns_html_when_extract_text_false(registry: ToolRegistry) -> None:
+    mock_resp = MagicMock()
+    mock_resp.text = "<html><body><main><p>Keep</p></main></body></html>"
+
+    with patch.object(ToolRegistry, "_request_with_retry", return_value=mock_resp):
+        out = registry.get_tool("scrape_webpage").function(
+            url="https://example.org/page",
+            selector="main",
+            extract_text=False,
+        )
+
+    assert out["success"] is True
+    assert "<main>" in out["result"]
+    assert "<p>Keep</p>" in out["result"]
+
+
+def test_scrape_webpage_returns_error_for_missing_selector(registry: ToolRegistry) -> None:
+    mock_resp = MagicMock()
+    mock_resp.text = "<html><body><main>Only main</main></body></html>"
+
+    with patch.object(ToolRegistry, "_request_with_retry", return_value=mock_resp):
+        out = registry.get_tool("scrape_webpage").function(
+            url="https://example.org/page",
+            selector=".missing",
+        )
+
+    assert out["success"] is False
+    assert "selector" in out["error"].lower()
+
+
+def test_scrape_webpage_rejects_row_dict_without_url_key(registry: ToolRegistry) -> None:
+    out = registry.get_tool("scrape_webpage").function(url={"score": 1})
+    assert out["success"] is False
+    assert "url" in (out.get("error") or "").lower()
+
+
+def test_discover_urls_accepts_keywords_as_list(registry: ToolRegistry) -> None:
+    html = """<html><body>
+    <a href="/dresser-plans">Dresser plans</a>
+    </body></html>"""
+    mock_resp = MagicMock()
+    mock_resp.text = html
+
+    with patch.object(ToolRegistry, "_request_with_retry", return_value=mock_resp):
+        out = registry.get_tool("discover_urls").function(
+            start_url="https://example.org/",
+            keywords=["dresser", "plans"],
+            use_sitemap=False,
+            max_results=10,
+        )
+    assert out["success"] is True
+    urls = [e["url"] for e in out["urls"]]
+    assert any("dresser" in u for u in urls)
+
+
 def test_discover_urls_page_links_and_keywords(registry: ToolRegistry) -> None:
     html = """<html><body>
     <a href="/about">About</a>
@@ -416,6 +755,7 @@ def test_discover_urls_page_links_and_keywords(registry: ToolRegistry) -> None:
         )
     assert out["success"] is True
     urls = [e["url"] for e in out["urls"]]
+    assert out.get("urls_only") == urls
     assert any("sci-fi" in u for u in urls)
     scores = [e["score"] for e in out["urls"]]
     assert scores == sorted(scores, reverse=True)
@@ -428,3 +768,198 @@ def test_discover_urls_requires_scheme_and_host(registry: ToolRegistry) -> None:
         use_page_links=False,
     )
     assert out["success"] is False
+
+
+def test_discover_urls_always_includes_start_url_when_no_links(registry: ToolRegistry) -> None:
+    """If the page has no extractable anchors, discovery must still return the entry URL."""
+    mock_resp = MagicMock()
+    mock_resp.text = "<html><body>No anchors here.</body></html>"
+
+    with patch.object(ToolRegistry, "_request_with_retry", return_value=mock_resp):
+        out = registry.get_tool("discover_urls").function(
+            start_url="https://example.org/howto/build-dresser",
+            keywords="dresser",
+            use_sitemap=False,
+            use_page_links=True,
+            max_results=10,
+        )
+    assert out["success"] is True
+    urls = [e["url"] for e in out["urls"]]
+    assert "https://example.org/howto/build-dresser" in urls
+
+
+def test_discover_urls_start_url_only_when_sitemap_and_links_disabled(registry: ToolRegistry) -> None:
+    """No HTTP fetch is required to list the seed page when both optional sources are off."""
+    out = registry.get_tool("discover_urls").function(
+        start_url="https://example.org/explicit-page",
+        use_sitemap=False,
+        use_page_links=False,
+        max_results=5,
+    )
+    assert out["success"] is True
+    assert out["urls"] == [{"url": "https://example.org/explicit-page", "score": 0}]
+    assert out["urls_only"] == ["https://example.org/explicit-page"]
+
+
+def test_discover_urls_expands_sitemap_index(registry: ToolRegistry) -> None:
+    """Sitemap-index XML should be followed one level and child URLs merged.
+
+    Cross-host child URLs must be dropped (same-origin only).
+    """
+    sitemap_index = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        "<sitemap><loc>https://example.org/sitemap-pages.xml</loc></sitemap>"
+        "</sitemapindex>"
+    )
+    sitemap_pages = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        "<url><loc>https://example.org/festivals/sci-fi</loc></url>"
+        "<url><loc>https://example.org/festivals/fantasy</loc></url>"
+        "<url><loc>https://other-host.example.com/should-be-dropped</loc></url>"
+        "</urlset>"
+    )
+    homepage_html = (
+        "<html><body>"
+        "<a href=\"/about\">About</a>"
+        "</body></html>"
+    )
+
+    def fake_request(url: str, **_kwargs):
+        resp = MagicMock()
+        if url.endswith("/sitemap.xml"):
+            resp.text = sitemap_index
+        elif url.endswith("/sitemap-pages.xml"):
+            resp.text = sitemap_pages
+        else:
+            resp.text = homepage_html
+        return resp
+
+    with patch.object(ToolRegistry, "_request_with_retry", side_effect=fake_request):
+        out = registry.get_tool("discover_urls").function(
+            start_url="https://example.org/",
+            keywords="sci-fi festival",
+            use_sitemap=True,
+            use_page_links=True,
+            max_results=20,
+        )
+
+    assert out["success"] is True
+    urls = [entry["url"] for entry in out["urls"]]
+    assert "https://example.org/festivals/sci-fi" in urls
+    assert "https://example.org/festivals/fantasy" in urls
+    # Cross-host loc must be filtered out.
+    assert not any("other-host.example.com" in u for u in urls)
+    # Same-origin homepage anchor still allowed.
+    assert any(u.endswith("/about") for u in urls)
+
+
+def test_contract_guidance_includes_discover_when_custom_research_steps() -> None:
+    """Research-shaped ``custom`` steps still get URL/scrape response contracts."""
+    text = build_contract_prompt_guidance(
+        {"custom", "generate_text"},
+        step_descriptions=[
+            "Research dresser plans from reputable woodworking websites and collect sources.",
+            "Write summary.md",
+        ],
+    )
+    assert "discover_urls response contract" in text
+    assert "scrape_webpage response contract" in text
+
+
+def test_validate_rejects_materials_extend_scrape_result() -> None:
+    bad = '''
+tools = ToolRegistry()
+scrape_webpage_tool = tools.get_tool("scrape_webpage")
+materials = []
+r = scrape_webpage_tool.function(url="https://example.org/")
+materials.extend(r.get("result"))
+'''
+    with pytest.raises(ValueError, match=r"materials\.extend"):
+        validate_tool_contracts(bad)
+
+
+def test_request_with_retry_uses_short_connect_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Avoid hanging ~30s×N on TCP connect; refuse/DNS-style errors skip extra tries."""
+    seen: list[Any] = []
+
+    def fake_get(url, timeout=None, headers=None):
+        seen.append(timeout)
+        raise requests.ConnectionError(
+            "HTTPSConnectionPool(host='x', port=443): Max retries exceeded with url: / "
+            '(Caused by NewConnectionError("<…>: Failed to establish a new connection: '
+            '[Errno 61] Connection refused"))'
+        )
+
+    monkeypatch.setattr(
+        "workflowmvp.tools._base.socket.getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))
+        ],
+    )
+    monkeypatch.setattr("workflowmvp.tools._base.requests.get", fake_get)
+    monkeypatch.setattr("workflowmvp.tools._base.time.sleep", lambda *a, **k: None)
+
+    with pytest.raises(RuntimeError, match="after 1 attempt"):
+        ToolRegistry._request_with_retry("https://example.com/x", timeout=30, attempts=3)
+
+    assert len(seen) == 1
+    connect, read = seen[0]
+    assert read == 30.0
+    assert connect == min(8.0, 30.0)
+
+
+def test_request_with_retry_still_retries_transient_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    n = 0
+
+    def fake_get(url, timeout=None, headers=None):
+        nonlocal n
+        n += 1
+        if n < 2:
+            raise requests.ReadTimeout("stall")
+        resp = MagicMock()
+        resp.raise_for_status = lambda: None
+        return resp
+
+    monkeypatch.setattr(
+        "workflowmvp.tools._base.socket.getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))
+        ],
+    )
+    monkeypatch.setattr("workflowmvp.tools._base.requests.get", fake_get)
+    monkeypatch.setattr("workflowmvp.tools._base.time.sleep", lambda *a, **k: None)
+    ToolRegistry._request_with_retry("https://example.com/", timeout=30, attempts=3)
+    assert n == 2
+
+
+def test_sqlite_query_rejects_write_statements(
+    registry: ToolRegistry, tmp_path: Path
+) -> None:
+    db = tmp_path / "app.db"
+    result = registry.get_tool("sqlite_query").function(
+        database_path=str(db),
+        query="CREATE TABLE users (name TEXT)",
+    )
+
+    assert result["success"] is False
+    assert "SELECT or PRAGMA" in result["error"]
+
+
+def test_sqlite_insert_rejects_invalid_identifiers(
+    registry: ToolRegistry, tmp_path: Path
+) -> None:
+    db = tmp_path / "app.db"
+    result = registry.get_tool("sqlite_insert").function(
+        database_path=str(db),
+        table="users; DROP TABLE users",
+        data={"name": "Alice"},
+    )
+
+    assert result["success"] is False
+    assert "Invalid table or column" in result["error"]

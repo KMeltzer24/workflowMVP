@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "workflowmvp"
 version = "0.2.0"
-description = "Turn screen-capture videos or text descriptions into executable Python workflows using Google's Gemini AI."
+description = "Turn screen recordings or prose into executable Python workflows (Flask UI; Google Gemini codegen over a constrained tool registry)."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -30,6 +30,7 @@ dependencies = [
     "yfinance>=0.2.0",
     "beautifulsoup4>=4.12.0",
     "pypdf>=5.0.0",
+    "openpyxl>=3.1.0",
 ]
 
 [project.optional-dependencies]
@@ -47,8 +48,14 @@ Issues = "https://github.com/KMeltzer24/workflowMVP/issues"
 workflowmvp = "main:main"
 
 [tool.setuptools]
-packages = ["workflowmvp"]
 py-modules = ["main"]
+
+[tool.setuptools.packages.find]
+include = ["workflowmvp*", "web*"]
+
+[tool.setuptools.package-data]
+"workflowmvp.prompts" = ["*.txt"]
+"web" = ["templates/*.html", "static/css/*.css", "static/js/*.js"]
 
 [tool.ruff]
 line-length = 100

@@ -1,7 +1,11 @@
 """
-Video to Workflow - Extract frames from a video and infer a text workflow using Gemini
+Video to workflow — sample frames from a recording and infer outcome-oriented prose
+steps using Gemini multimodal ``generate_content`` (JPEG frames → text workflow).
 """
 
+from __future__ import annotations
+
+import logging
 import os
 import shutil
 import tempfile
@@ -12,6 +16,11 @@ import numpy as np
 from google import genai
 from google.genai import types
 
+from .llm import DEFAULT_GEMINI_MODEL, gemini_response_to_text
+from .prompts import load_prompt_template
+
+logger = logging.getLogger(__name__)
+
 # JPEG quality for frame files sent to Gemini (lower = smaller files, faster upload).
 _FRAME_JPEG_QUALITY = 82
 # Minimum visual distance (0..1) vs last kept frame to count as a new scene.
@@ -19,43 +28,18 @@ _SCENE_CHANGE_MIN = 0.18
 # Compare downscaled frames so 4K recordings stay fast.
 _COMPARE_MAX_SIDE = 480
 
-_DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 _GEMINI_VIDEO_TEMPERATURE = 0.1
 _GEMINI_VIDEO_MAX_OUTPUT_TOKENS = 2048
 
 
 def _resolve_gemini_model(model: Optional[str]) -> str:
-    return (model or os.getenv("GEMINI_MODEL", _DEFAULT_GEMINI_MODEL)).strip()
+    return (model or os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)).strip()
 
 
 def _video_workflow_prompt(frame_count: int) -> str:
     """Instructions for Gemini vision: outcome-oriented workflow text from key frames."""
-    return f"""You are analyzing {frame_count} screenshots from a screen recording.
-
-## Task
-Infer the **outcome** the user wants (what to accomplish), not a play-by-play of clicks and keystrokes.
-
-## Rules
-- **No frozen facts:** on-screen times, countdowns, snippets, and search results are stale after the recording. Describe **what to compute at run time**, not literals copied from the UI.
-- **Intent from UI:** use visible queries, headings, and geography to infer goals (e.g. local vs exchange/session clock, regions, IANA timezones when appropriate). Keep “user local” and “market/session close” separate when both matter.
-- **Email addresses:** copy the visible **To:** / recipient field **exactly** (character by character). Digits in the local-part (e.g. `kevinmeltzer` vs `kevinmeltzer1`) are easy to misread from video — double-check. Do not “normalize” or substitute a different address.
-- **Email:** if mail compose or send appears, end with **send email** using that recipient and subject **themes** from the recording; body instructions must **derive** content from earlier computational steps.
-- **Scope:** automate the goal, not every hover, type, or click. Search + email flows → gather or compute facts, then one email, unless true browser automation is required.
-- **Stable data:** preserve emails, paths, tickers, explicit API URLs, and subject themes visible in the UI.
-- **URLs:** prefer explicit feeds or API URLs over long tracked portal URLs when summarizing external content.
-- **Implementability:** each step must be doable with Python stdlib, HTTP, files, email, and this app’s tool layer — **no** reliance on unspecified third-party packages.
-
-## Output format
-Number steps (1., 2., 3., …). For email steps: recipient, subject intent, and body tied to **computed** earlier steps — never paste transcript text as fixed truth.
-
-## Pattern examples (not exhaustive)
-✓ Current local time in the timezone implied by searches or visible locale in the recording.
-✓ Next nominal regular-session US equity close and minutes until then at run time (state simplifying assumptions in the step text).
-✓ Send email to … with subject …; body uses computed times and intervals.
-✗ A permanent answer copied from an on-screen countdown (e.g. “22 minutes”).
-✗ Many steps that only narrate typing and clicking with no runnable outcome.
-
-Generate the workflow text now.""".strip()
+    template = load_prompt_template("video_workflow_v1.txt")
+    return template.format(frame_count=frame_count).strip()
 
 
 def _ensure_parent_dir(path: str) -> None:
@@ -115,7 +99,7 @@ def sample_frames_intelligent(video_path: str, max_frames: int = 15) -> Tuple[Li
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
     duration = total_frames / fps if total_frames > 0 else 0.0
 
-    print(f"📹 Video: {total_frames} frames, {duration:.1f}s duration")
+    logger.info("Video: %s frames, %.1fs duration", total_frames, duration)
 
     tmpdir = tempfile.mkdtemp(prefix="wf_frames_")
     selected_frames: List[str] = []
@@ -164,19 +148,19 @@ def sample_frames_intelligent(video_path: str, max_frames: int = 15) -> Tuple[Li
     if len(selected_frames) < max_frames and total_frames > 1:
         cap.set(cv2.CAP_PROP_POS_FRAMES, total_frames - 1)
         ret, last_frame = cap.read()
-        if ret and last_frame is not None and last_frame.size > 0:
+        if ret and last_frame is not None and last_frame.size != 0:
             last_path = os.path.join(tmpdir, f"frame_{total_frames - 1:05d}_end.jpg")
             cv2.imwrite(last_path, last_frame, encode_params)
             selected_frames.append(last_path)
 
     cap.release()
 
-    print(f"📸 Extracted {len(selected_frames)} key frames")
+    logger.info("Extracted %s key frame(s)", len(selected_frames))
     return selected_frames, tmpdir
 
 
 def infer_workflow_from_frames(frame_paths: List[str], api_key: str, model: Optional[str] = None) -> str:
-    """Analyze video frames and infer an outcome-oriented workflow (not UI replay)."""
+    """Analyze JPEG frames with Gemini and return outcome-oriented numbered steps, or ``""`` on failure."""
     resolved = _resolve_gemini_model(model)
     client = genai.Client(api_key=api_key)
     prompt = _video_workflow_prompt(len(frame_paths))
@@ -189,7 +173,7 @@ def infer_workflow_from_frames(frame_paths: List[str], api_key: str, model: Opti
                 frame_data = f.read()
             contents.append(types.Part.from_bytes(data=frame_data, mime_type="image/jpeg"))
 
-        print("🤖 Analyzing frames with AI...")
+        logger.info("Analyzing %s frame(s) with Gemini (%s)...", len(frame_paths), resolved)
         resp = client.models.generate_content(
             model=resolved,
             contents=contents,
@@ -199,28 +183,24 @@ def infer_workflow_from_frames(frame_paths: List[str], api_key: str, model: Opti
             ),
         )
 
-        result = resp.text or ""
-        print("✅ Workflow analysis complete")
+        result = gemini_response_to_text(resp).strip()
+        if not result:
+            logger.warning("Gemini returned empty workflow text for video frames")
+            return ""
+
+        logger.info("Video workflow text generated (%s chars)", len(result))
         return result
 
-    except Exception as e:
-        print(f"❌ Error during AI analysis: {e}")
-        return f"""Error analyzing video frames: {str(e)}
-
-Fallback workflow:
-1. Open application or website
-2. Perform main task or operation
-3. Save or submit results
-4. Complete workflow
-
-Please check your API key and try again with a clearer video."""
+    except Exception:
+        logger.exception("Gemini workflow inference failed for video frames")
+        return ""
 
 
 def video_to_workflow_txt(video_path: str, output_txt: str, api_key: str, model: Optional[str] = None) -> str:
     """Convert video to workflow text; writes output file or a fallback on failure."""
     temp_dir: Optional[str] = None
     try:
-        print(f"🎥 Processing video: {video_path}")
+        logger.info("Processing video: %s", video_path)
 
         if not os.path.exists(video_path):
             raise FileNotFoundError(f"Video file not found: {video_path}")
@@ -241,10 +221,10 @@ def video_to_workflow_txt(video_path: str, output_txt: str, api_key: str, model:
 
         return output_txt
 
-    except Exception as e:
-        print(f"❌ Video processing failed: {e}")
+    except Exception as exc:
+        logger.warning("Video processing failed: %s", exc)
 
-        fallback_content = f"""# Video processing failed: {str(e)}
+        fallback_content = f"""# Video processing failed: {str(exc)}
 
 # Fallback workflow - please edit manually:
 1. Open the application or website shown in your video

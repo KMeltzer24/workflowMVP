@@ -29,11 +29,73 @@ def test_parses_simple_numbered_steps(parser: WorkflowParser) -> None:
     assert steps[2].parameters.get("seconds") == 2
 
 
-def test_dependencies_link_sequentially(parser: WorkflowParser) -> None:
+def test_independent_steps_do_not_auto_chain(parser: WorkflowParser) -> None:
+    """Adjacent but unrelated steps must not get a fake dependency.
+
+    The previous parser unconditionally appended ``steps[i-1].step_id`` which
+    over-constrained codegen for parallel work. We now require explicit
+    data-flow markers in the description.
+    """
     text = "1. Create a directory\n2. Write a file"
     steps = parser.parse_workflow(text)
     assert steps[0].dependencies == []
-    assert steps[1].dependencies == ["step_1"]
+    assert steps[1].dependencies == []
+
+
+def test_explicit_dependency_markers_link_steps(parser: WorkflowParser) -> None:
+    text = (
+        "1. Fetch the latest news headlines\n"
+        "2. Use the result to compose an email\n"
+        "3. Send the email from step 2 to test@example.com"
+    )
+    steps = parser.parse_workflow(text)
+    assert steps[0].dependencies == []
+    assert "step_1" in steps[1].dependencies
+    assert "step_2" in steps[2].dependencies
+
+
+def test_paragraph_between_steps_does_not_merge(parser: WorkflowParser) -> None:
+    text = (
+        "1. Download https://example.com/data.json\n"
+        "Some intro paragraph that the user pasted between steps and is not\n"
+        "indented and does not start with a continuation marker.\n"
+        "2. Write the text \"hi\" to file \"out.txt\""
+    )
+    steps = parser.parse_workflow(text)
+    assert len(steps) == 2
+    assert steps[0].description == "Download https://example.com/data.json"
+    assert steps[0].action == "download"
+    assert steps[1].action == "write_file"
+
+
+def test_indented_continuation_still_merges(parser: WorkflowParser) -> None:
+    text = (
+        "1. Download https://example.com/data.json\n"
+        "   then save it as raw_data.json\n"
+        "2. Write the text \"hi\" to file \"out.txt\""
+    )
+    steps = parser.parse_workflow(text)
+    assert len(steps) == 2
+    assert "raw_data.json" in steps[0].description
+
+
+def test_bare_uppercase_word_is_not_a_ticker(parser: WorkflowParser) -> None:
+    """USA, ASAP, HTTP and friends must not become stock tickers."""
+    steps = parser.parse_workflow("1. Get the USA price right now")
+    assert steps[0].parameters.get("ticker") in (None, "")
+
+
+def test_explicit_ticker_marker_is_detected(parser: WorkflowParser) -> None:
+    steps = parser.parse_workflow("1. Find the price of $AAPL")
+    assert steps[0].action == "fetch_stock_price"
+    assert steps[0].parameters.get("ticker") == "AAPL"
+
+    steps = parser.parse_workflow("1. Get BTC-USD price")
+    assert steps[0].parameters.get("ticker") == "BTC-USD"
+
+    steps = parser.parse_workflow("1. Get the stock price for ticker MSFT")
+    assert steps[0].action == "fetch_stock_price"
+    assert steps[0].parameters.get("ticker") == "MSFT"
 
 
 def test_detects_email_action(parser: WorkflowParser) -> None:

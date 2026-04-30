@@ -12,7 +12,9 @@
             <span class="brand-mark">WF</span>
             <div>
                 <h1>WorkflowMVP</h1>
-                <p class="subtitle">Natural language &amp; screen recordings &rarr; runnable Python workflows</p>
+                <p class="subtitle">
+                    Parsed steps &rarr; <strong>Gemini</strong> codegen &rarr; sandboxed Python (résumé / portfolio demo)
+                </p>
             </div>
         </div>
         <div class="topbar-actions">
@@ -30,6 +32,14 @@
 
     <main class="container">
 
+        <section class="site-intro" role="region" aria-label="About this project">
+            <p>
+                <strong>WorkflowMVP</strong> is an end-to-end <em>constraints-first</em> automation demo meant for portfolios:
+                prose (or captured video) becomes structured actions, then <strong>Gemini</strong> emits Python wired to a curated
+                <strong>tool registry</strong> &mdash; the <strong>Tools</strong> tab lists every builtin the server exposes.
+                Parsing is rule-led with optional model repair; generated scripts validate before write and run under rlimits below.
+            </p>
+        </section>
         <section class="tab-panel active" id="tab-create" role="tabpanel">
             <div class="panel">
                 <div class="panel-header">
@@ -82,6 +92,7 @@
                 <div class="actions">
                     <button class="primary" id="generateBtn" type="button" disabled>Generate Python code</button>
                 </div>
+                <div id="generateStatus" class="generate-status hidden" role="status" aria-live="polite" aria-atomic="true"></div>
             </div>
         </section>
 
@@ -104,7 +115,7 @@
             <div class="panel">
                 <div class="panel-header">
                     <h2>Examples</h2>
-                    <span class="pill">Click to load</span>
+                    <span id="examplesCountPill" class="pill">— baked-in demos</span>
                 </div>
                 <div id="examples" class="cards"></div>
             </div>
@@ -117,10 +128,9 @@
                     <span id="toolCountPill" class="pill">0 tools</span>
                 </div>
                 <p class="muted tools-intro">
-                    These functions are exposed to <strong>generated Python workflows</strong> via
-                    <code>ToolRegistry().get_tool('name')</code>. Each card lists parameters your natural-language
-                    steps can map to after parsing. Categories help filter; search matches names, descriptions, and
-                    parameter keys. New tools appear here automatically from the server&rsquo;s registry.
+                    Loaded from <code>/api/tools</code> &mdash; <span id="toolRegistryTotalNote">waiting for registry…</span>.
+                    Cards map to parameters your prose can ground after parsing. Categories filter; search scans names,
+                    descriptions, and parameter keys with <code>X / N tools</code> showing filtered vs&nbsp;listed.
                 </p>
                 <div class="tool-controls">
                     <input id="toolSearchInput" type="text" placeholder="Search tools by name, description, or parameter...">
@@ -146,6 +156,9 @@
             <form id="settingsForm" class="form-grid" autocomplete="off">
                 <label>Gemini API key
                     <input type="password" name="GEMINI_API_KEY" autocomplete="off">
+                </label>
+                <label>Gemini model
+                    <input type="text" name="GEMINI_MODEL" placeholder="gemini-2.5-flash" autocomplete="off">
                 </label>
                 <label>SMTP username
                     <input type="text" name="EMAIL_USER" autocomplete="off">

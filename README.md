@@ -1,173 +1,220 @@
 # WorkflowMVP
 
 [![ci](https://github.com/KMeltzer24/workflowMVP/actions/workflows/ci.yml/badge.svg)](https://github.com/KMeltzer24/workflowMVP/actions/workflows/ci.yml)
-[![python](https://img.shields.io/badge/python-3.11%2B-blue)](#install)
+[![python](https://img.shields.io/badge/python-3.11%2B-blue)](#requirements)
 [![license](https://img.shields.io/badge/license-MIT-green)](#license)
 
-Turn natural-language descriptions — or screen-capture videos — into runnable Python workflows.
+WorkflowMVP is a Flask application that turns plain-English workflow descriptions, or a short screen recording, into runnable Python automation scripts.
 
-WorkflowMVP uses an online LLM (Gemini, Groq, or OpenRouter) to parse descriptions and generate executable Python, backed by a built-in tool registry covering HTTP requests, AI text generation, stock prices, file I/O, email, CSV/JSON, SQLite, compression, and more. Everything runs in a sandboxed directory with live output streamed to the browser.
+The project is designed as a practical AI engineering demo: it combines rule-based parsing, optional Gemini-assisted parsing, Gemini code generation, a constrained tool system, subprocess execution, live run logs, and safety checks around generated code.
 
----
+## What It Does
 
-## Quick start
+Users can:
 
-```bash
-git clone https://github.com/KMeltzer24/workflowMVP.git
-cd workflowMVP
-python3.11 -m venv .venv   # optional; use any Python 3.11+
-source .venv/bin/activate  # optional
-pip install -r requirements.txt
-cp .env.example .env       # add your API key
-make run                   # open http://localhost:5050
+1. Describe a workflow in numbered steps, or upload a screen recording.
+2. Parse the workflow into structured actions.
+3. Generate Python code from those actions.
+4. Run the generated workflow from the browser.
+5. Stream stdout/stderr logs live through Server-Sent Events.
+
+Example workflow:
+
+```text
+1. Download https://api.coinbase.com/v2/prices/BTC-USD/spot
+2. Write the Bitcoin USD price to file "bitcoin_price.txt"
+3. Send notification with title "Bitcoin" and message "Price saved"
 ```
 
-On macOS, `/usr/bin/python3` is often 3.9; use Homebrew `python3.11` (or similar) to create the venv so it matches the **3.11+** requirement.
+## Core Architecture
 
----
+```mermaid
+flowchart LR
+    input["Text or video input"] --> parser["WorkflowParser"]
+    input --> video["OpenCV frame sampler"]
+    video --> vision["Gemini vision prompt"]
+    vision --> parser
+    parser --> validation["Typed step validation"]
+    validation --> agent["WorkflowAgent + Gemini"]
+    agent --> script["Generated Python script"]
+    script --> runner["Subprocess runner"]
+    runner --> tools["ToolRegistry"]
+    runner --> logs["SSE logs in browser"]
+```
 
-## Highlights
+Key components:
 
-- Text descriptions or screen-recording videos → executable Python.
-- 30 built-in tools including `http_request`, `scrape_webpage`, **`discover_urls`** (sitemap + same-origin links, keyword-ranked), `generate_text`, `read_json` / `write_json`, `append_file`, `hash_file`, `get_current_time`, `read_pdf`, `render_template`, and `fetch_stock_price`.
-- Browser UI with tabs, live streaming output, save/load workflows, and inline credential prompts.
-- **Create** flow: edit parsed steps before *Generate Python code*; saving a step re-parses that line so action/parameters stay aligned.
-- Code generation checks **Python syntax** before writing a script, retries once with a stricter completion instruction if needed, and the system prompt stresses **no fabricated facts** (fetch real pages/feeds/prices first; `generate_text` summarizes supplied content).
-- Credentials stay in your browser's `sessionStorage` or `.env` — never written to disk server-side.
-- Hybrid parsing: rule-based first, AI assist only when confidence is low.
-- Tool safety profile: sandboxed file paths and blocked dangerous shell commands by default.
-- Pytest suite + GitHub Actions CI (ruff + pytest on Python 3.11).
+- `main.py` - Flask routes, UI endpoints, workflow generation, and run streaming.
+- `workflowmvp/parser.py` - rule-first parser that converts prose into structured workflow steps.
+- `workflowmvp/agent.py` - Gemini-backed code generator for runnable Python workflows.
+- `workflowmvp/services/` - runner, validation, credentials, cleanup, path safety, and static analysis helpers.
+- `workflowmvp/tools/` - built-in tool registry used by generated scripts.
+- `workflowmvp/prompts/` - versioned prompt templates for LLM workflows.
+- `web/` - browser UI for creating, generating, and running workflows.
+- `tests/` - pytest coverage for parser, tools, API routes, generated-code validation, and video flow.
 
-## Install
+## Tool System
 
-Requires Python 3.11+.
+The tool system is the main design feature. Generated scripts call a curated `ToolRegistry` instead of inventing file, network, email, database, and parsing logic from scratch. This keeps AI-generated code smaller, safer, and easier to test.
+
+The registry currently exposes 34 built-in tools:
+
+| Category | Tools | What They Do |
+| --- | --- | --- |
+| Files | `read_file`, `write_file`, `append_file`, `list_files`, `create_directory`, `copy_file`, `move_file`, `delete_file`, `hash_file` | Basic sandboxed file and directory operations. |
+| Structured files | `read_csv`, `write_csv`, `read_json`, `write_json`, `read_xlsx`, `write_xlsx`, `read_pdf` | Read/write common data formats and extract PDF text. |
+| Network | `download`, `http_request`, `scrape_webpage`, `discover_urls` | Fetch public HTTP content, call APIs, scrape readable page text, and discover same-site URLs. |
+| AI and templates | `generate_text`, `render_template` | Generate Gemini text output or render deterministic Jinja2 templates. |
+| Text processing | `extract_regex`, `replace_text`, `split_text` | Perform deterministic text extraction and transformation without another LLM call. |
+| Communication | `send_email`, `send_notification` | Send SMTP email or local desktop notifications. |
+| Data and finance | `sqlite_query`, `sqlite_insert`, `fetch_stock_price` | Work with local SQLite databases and retrieve recent market prices. |
+| Time and archives | `wait`, `get_current_time`, `compress_files`, `extract_archive` | Handle timing, timestamps, ZIP creation, and ZIP extraction. |
+
+Each tool returns a normalized response envelope:
+
+```python
+{
+    "success": True,
+    "result": "...",
+    "error": None,
+    "meta": {"tool": "download"}
+}
+```
+
+`result` is the primary output. `meta` stores details such as file paths, row counts, status codes, URLs, sheet names, or tool names. Older compatibility fields like `content`, `data`, `message`, `files`, or `rows` may still be present, but new generated code should prefer `result` and `meta`.
+
+Example generated-code usage:
+
+```python
+tools = ToolRegistry()
+read_json = tools.get_tool("read_json")
+response = read_json.function(file_path="data.json")
+
+if response["success"]:
+    payload = response["result"]
+else:
+    print(response["error"])
+```
+
+The registry also includes practical safety controls:
+
+- Generated workflows run in per-run output directories.
+- File tools enforce sandbox path boundaries during runs.
+- Network tools block localhost, private IPs, metadata IPs, and non-HTTP schemes.
+- Side-effecting tools such as email, file writes, HTTP requests, SQLite writes, and archive extraction are surfaced during workflow validation.
+- Credential-aware tools advertise required settings such as `GEMINI_API_KEY` or SMTP variables.
+- Shell execution is disabled by default and only appears when `WORKFLOW_SAFETY_PROFILE=full`.
+- Run logs redact known secret values before returning stdout/stderr to the UI.
+- Generated code is compiled and checked against known tool-contract mistakes before saving.
+
+From an engineering perspective, the registry is intentionally simple: each tool is a small Python function wrapped by a shared response normalizer, with tests covering safety rules, parsing contracts, and common success/failure paths.
+
+## Why This Project Matters
+
+This project demonstrates junior SWE skills that are useful on real teams:
+
+- building a full-stack Python web app
+- designing service boundaries around risky operations
+- writing tests for API routes, tools, parsing, and safety behavior
+- integrating LLMs without letting prompts become the whole system
+- using typed validation at the boundary between browser JSON and code generation
+- packaging Python code correctly with subpackages and prompt data
+- maintaining CI with `pytest` and `ruff`
+
+## Requirements
+
+- Python 3.11+
+- Google Gemini API key for code generation and video analysis
+
+## Setup
 
 ```bash
 git clone https://github.com/KMeltzer24/workflowMVP.git
 cd workflowMVP
-python3.11 -m venv .venv && source .venv/bin/activate   # recommended
-pip install -r requirements.txt
+
+python3.11 -m venv .venv
+source .venv/bin/activate
+
+pip install ".[dev]"
+
 cp .env.example .env
 ```
 
-Set your LLM provider credentials in `.env`:
+Add your Gemini key to `.env`:
 
-```
-LLM_PROVIDER=gemini          # or groq, openrouter
+```bash
 GEMINI_API_KEY=your_key_here
+GEMINI_MODEL=gemini-2.5-flash
 ```
 
-Video parsing always requires `GEMINI_API_KEY` even if another provider is used for code generation.
+SMTP settings are optional and only needed for workflows that send email.
 
-## Run
+## Run Locally
 
 ```bash
-make run                  # Gemini (default), port 5050
-make run PROVIDER=2       # Groq
-make run PROVIDER=3       # OpenRouter
-make debug                # debug mode with auto-reload
+make run
 ```
 
-Or directly:
+Open:
+
+```text
+http://127.0.0.1:5050
+```
+
+Alternative:
 
 ```bash
-python3 main.py
-python3 main.py --port 5001
-python3 main.py --debug
-LLM_PROVIDER=groq python3 main.py
+python main.py --port 5001 --debug
 ```
-
-Open <http://localhost:5050>.
-
-
-## Using the web UI
-
-1. **Create** tab — write a numbered workflow or upload a screen-capture video, then click *Parse workflow*. Use *Edit* on any step to fix wording, URLs, emails, or tickers; *Save* re-runs the rule parser on that step.
-2. **Generate Python code** — sends the current steps to the configured LLM, validates the returned script, and writes it under `data/generated_workflows/`. Each run is independent (no memory of prior generated files).
-3. **Run** tab — executes the script in a sandboxed `data/temp_outputs/<run_id>/` directory. Output streams live. Artifacts persist until server shutdown or `/api/cleanup`.
-4. **Examples** tab — seven ready-to-run workflows, including SMTP and notification demos.
-5. **Tools** tab — browse every tool available to generated code.
-6. **Settings** — enter Gemini/SMTP credentials for the browser session. Provider keys (Groq/OpenRouter) are set via `.env`.
-
-For **event or schedule** steps on a public site, prefer a **direct program URL** in the step text when you have one. Otherwise generated code can use **`discover_urls`** (homepage + sitemap + on-page links) to pick a candidate page before **`scrape_webpage`** — it does not crawl arbitrary deep sites.
-
-## Example workflow
-
-```
-1. Fetch the current S&P 500 price
-2. Write a short poem about the price
-3. Email the poem to me@example.com
-```
-
-Paste into the Create tab → *Parse workflow* → *Generate Python code* → *Run*.
-
-## HTTP API
-
-Routes are implemented in `main.py`; the web UI calls them from `web/static/js/app.js`. POST bodies may include a `credentials` object — those values are merged into the workflow subprocess environment and are not written to disk.
 
 ## Development
 
+Run tests and lint:
+
 ```bash
-pip install -r requirements-dev.txt
-pytest          # run all tests (use `python -m pytest` if `pytest` is not on PATH)
-ruff check .    # lint (`python -m ruff check .` if needed)
-make clean      # wipe generated scripts, temp outputs, and pytest/ruff caches
+.venv/bin/python -m pytest
+.venv/bin/ruff check .
 ```
 
-### Project layout
+Build the package:
 
-```
-workflowMVP/
-├── main.py                  # Flask app, subprocess runner, SSE streaming, cleanup
-├── workflowmvp/
-│   ├── parser.py            # rule-based text → structured steps
-│   ├── agent.py             # LLM-backed code generator (multi-provider)
-│   ├── tools.py             # ToolRegistry: 30 tools
-│   └── video_to_workflow.py # frame sampling + Gemini vision analysis
-├── web/
-│   ├── templates/index.html
-│   └── static/
-│       ├── css/style.css
-│       └── js/app.js
-├── tests/
-├── .github/workflows/ci.yml
-├── pyproject.toml
-├── Makefile
-└── .env.example
+```bash
+.venv/bin/python -m build
 ```
 
-### Adding a tool
+Clean generated artifacts:
 
-```python
-from workflowmvp.tools import Tool, ToolRegistry
-
-def my_tool(param: str) -> dict:
-    return {"success": True, "result": param.upper()}
-
-registry = ToolRegistry()
-registry.register_tool(Tool(
-    name="shout",
-    description="Uppercase a string.",
-    function=my_tool,
-    parameters={"param": "String to uppercase"},
-))
+```bash
+make clean
 ```
 
-## Troubleshooting
+## Environment Variables
 
-- **"Missing provider API key"** — set `LLM_PROVIDER` and the matching key in `.env` (`GEMINI_API_KEY`, `GROQ_API_KEY`, or `OPENROUTER_API_KEY`).
-- **Email fails with "Missing SMTP credentials"** — open *Settings* and fill in `EMAIL_USER`, `EMAIL_PASSWORD`, and `EMAIL_FROM`. Works with any SMTP provider: Gmail (needs an [App Password](https://myaccount.google.com/apppasswords)), Outlook (`smtp-mail.outlook.com:587`), Yahoo (`smtp.mail.yahoo.com:587`), or any custom SMTP server — set `SMTP_SERVER` and `SMTP_PORT` in `.env` accordingly.
-- **Video parse returns no steps** — re-record with slower, clearer interactions or increase `max_frames` in `workflowmvp/video_to_workflow.py`.
-- **"Workflow file not found"** — the file was likely removed by a previous cleanup. Regenerate the workflow and run again.
+Common variables:
+
+```bash
+GEMINI_API_KEY=...
+GEMINI_MODEL=gemini-2.5-flash
+
+EMAIL_USER=...
+EMAIL_PASSWORD=...
+EMAIL_FROM=...
+SMTP_SERVER=smtp.gmail.com
+SMTP_PORT=587
+```
+
+Server defaults:
+
+```bash
+HOST=127.0.0.1
+PORT=5050
+WORKFLOW_MAX_UPLOAD_MB=100
+```
+
+## Notes
+
+WorkflowMVP runs generated Python on the server host. The project includes several guardrails, but it is intended as a local portfolio/demo app, not a multi-tenant production automation platform.
 
 ## License
 
 MIT
-
-## Acknowledgements
-
-- [Google Gemini](https://ai.google.dev/) for text and vision generation.
-- [Groq](https://groq.com/) and [OpenRouter](https://openrouter.ai/) for alternative LLM providers.
-- [yfinance](https://github.com/ranaroussi/yfinance) for stock and index price data.
-- [Flask](https://flask.palletsprojects.com/) for the web server.
-- [OpenCV](https://opencv.org/) for video frame sampling.

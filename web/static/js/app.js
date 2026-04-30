@@ -11,6 +11,7 @@ const CREDS_KEY = "workflowmvp.credentials";
 const SAVED_WORKFLOWS_KEY = "workflowmvp.savedWorkflows";
 const CREDENTIAL_KEYS = [
     "GEMINI_API_KEY",
+    "GEMINI_MODEL",
     "EMAIL_USER",
     "EMAIL_PASSWORD",
     "EMAIL_FROM",
@@ -26,6 +27,9 @@ const state = {
     parseConfidence: null,
     parseAiAssisted: false,
     tools: [],
+    generateTimerId: null,
+    generateStartMs: null,
+    lastGenerationSeconds: null,
 };
 
 // -------------------- Credentials --------------------
@@ -109,6 +113,9 @@ function activateTab(name) {
     document.querySelectorAll(".tab-panel").forEach((panel) => {
         panel.classList.toggle("active", panel.id === `tab-${name}`);
     });
+    if (name === "run") {
+        updateRunSummary();
+    }
 }
 
 document.querySelectorAll(".tab").forEach((btn) => {
@@ -124,6 +131,11 @@ async function loadTools() {
         state.tools = Array.isArray(tools) ? tools : [];
         buildToolCategoryOptions(state.tools);
         renderTools();
+        const note = document.getElementById("toolRegistryTotalNote");
+        if (note) {
+            const n = state.tools.length;
+            note.textContent = `${n === 1 ? "1 builtin registered" : `${n} builtins registered`}`;
+        }
     } catch (err) {
         toast(`Could not load tools: ${err.message}`, "error");
     }
@@ -134,7 +146,7 @@ function buildToolCategoryOptions(tools) {
     if (!select) return;
     const categories = new Set(["all"]);
     for (const tool of tools) {
-        categories.add(toolCategory(tool.name));
+        categories.add(toolCategory(tool));
     }
     const ordered = Array.from(categories).sort();
     select.innerHTML = "";
@@ -157,7 +169,7 @@ function renderTools() {
         const params = Object.keys(tool.parameters || {}).join(" ").toLowerCase();
         const haystack = `${tool.name || ""} ${tool.description || ""} ${params}`.toLowerCase();
         const matchesSearch = !search || haystack.includes(search);
-        const matchesCategory = category === "all" || toolCategory(tool.name) === category;
+        const matchesCategory = category === "all" || toolCategory(tool) === category;
         return matchesSearch && matchesCategory;
     });
 
@@ -180,7 +192,11 @@ function renderTools() {
         `${filtered.length} / ${state.tools.length} tools`;
 }
 
-function toolCategory(name) {
+function toolCategory(tool) {
+    if (tool && typeof tool === "object" && tool.category) {
+        return String(tool.category);
+    }
+    const name = tool && typeof tool === "object" ? tool.name : tool;
     const n = String(name || "").toLowerCase();
     if (n === "generate_text") return "ai";
     if (n === "fetch_stock_price") return "finance";
@@ -204,7 +220,13 @@ async function loadExamples() {
         const response = await fetch("/api/examples");
         const examples = await response.json();
         const host = document.getElementById("examples");
+        if (!host) return;
         host.innerHTML = "";
+        const pill = document.getElementById("examplesCountPill");
+        if (pill) {
+            const n = Array.isArray(examples) ? examples.length : 0;
+            pill.textContent = n === 1 ? "1 starter workflow" : `${n} starter workflows`;
+        }
         for (const example of examples) {
             const card = document.createElement("div");
             card.className = "card clickable";
@@ -482,12 +504,89 @@ function markParseInsightsStale() {
 
 // -------------------- Generate --------------------
 
+function formatGenerationWallClockSeconds(sec) {
+    const n = Number(sec);
+    if (sec == null || Number.isNaN(n)) return null;
+    if (n < 60) {
+        return `${n < 10 ? n.toFixed(2) : n.toFixed(1)}s`;
+    }
+    const m = Math.floor(n / 60);
+    const r = n - m * 60;
+    return `${m}m ${r.toFixed(0)}s`;
+}
+
+function updateRunSummary() {
+    const el = document.getElementById("runMeta");
+    if (!el) return;
+    const path = state.currentWorkflowPath;
+    if (!path) {
+        el.textContent =
+            "Generate Python code from a parsed workflow to enable the run button.";
+        return;
+    }
+    const formatted = formatGenerationWallClockSeconds(state.lastGenerationSeconds);
+    const tail = formatted ? ` — generated in ${formatted} (Gemini)` : "";
+    el.textContent = `Ready to run: ${path}${tail}.`;
+}
+
+function formatGenerateElapsed(ms) {
+    const s = Math.floor(ms / 1000);
+    if (s < 60) return `${s}s`;
+    const m = Math.floor(s / 60);
+    const r = s - m * 60;
+    return `${m}m ${r}s`;
+}
+
+function startGenerateProgress() {
+    const btn = document.getElementById("generateBtn");
+    const status = document.getElementById("generateStatus");
+    if (!btn) return;
+    btn.dataset.prevLabel = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "Generating…";
+    if (status) {
+        status.textContent = "Calling the model and validating Python… 0s";
+        status.classList.remove("hidden");
+        status.classList.add("is-active");
+    }
+    state.generateStartMs = Date.now();
+    state.generateTimerId = window.setInterval(() => {
+        if (!status || state.generateStartMs == null) return;
+        const elapsed = Date.now() - state.generateStartMs;
+        status.textContent = `Calling the model and validating Python… ${formatGenerateElapsed(elapsed)}`;
+    }, 250);
+}
+
+function stopGenerateProgress() {
+    if (state.generateTimerId != null) {
+        window.clearInterval(state.generateTimerId);
+        state.generateTimerId = null;
+    }
+    state.generateStartMs = null;
+    const btn = document.getElementById("generateBtn");
+    const status = document.getElementById("generateStatus");
+    if (btn) {
+        btn.disabled = false;
+        const prev = btn.dataset.prevLabel;
+        if (prev) {
+            btn.textContent = prev;
+            delete btn.dataset.prevLabel;
+        }
+    }
+    if (status) {
+        status.classList.add("hidden");
+        status.classList.remove("is-active");
+        status.textContent = "";
+    }
+}
+
 async function generateWorkflow() {
     if (!state.parsedSteps.length) {
         toast("Parse a workflow first", "warning");
         return;
     }
     toast("Generating Python code...");
+    startGenerateProgress();
     try {
         const response = await fetch("/api/generate-workflow", {
             method: "POST",
@@ -509,12 +608,17 @@ async function generateWorkflow() {
             return;
         }
         state.currentWorkflowPath = data.output_path;
+        const gs = data.generation_seconds;
+        const sec = typeof gs === "number" ? gs : parseFloat(gs);
+        state.lastGenerationSeconds = Number.isFinite(sec) ? sec : null;
         document.getElementById("runBtn").disabled = false;
-        document.getElementById("runMeta").textContent = `Ready to run: ${data.output_path}`;
+        updateRunSummary();
         toast("Python code generated", "success");
         activateTab("run");
     } catch (err) {
         toast(`Generate error: ${err.message}`, "error");
+    } finally {
+        stopGenerateProgress();
     }
 }
 

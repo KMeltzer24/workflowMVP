@@ -1,7 +1,7 @@
 """Tests for the video-to-workflow pipeline.
 
 Covers:
-  - /api/parse-video error paths (missing file, wrong provider, no key).
+  - /api/parse-video error paths (missing file, no Gemini key).
   - calculate_frame_difference edge cases (identical vs different frames).
   - sample_frames_intelligent on a tiny synthetic video (first + last).
   - infer_workflow_from_frames with Gemini fully mocked — no network.
@@ -19,6 +19,19 @@ import pytest
 from workflowmvp import video_to_workflow as vtw
 
 # ---------------------------------------------------------------------------
+# Prompt template
+# ---------------------------------------------------------------------------
+
+
+def test_video_workflow_prompt_loads_template() -> None:
+    prompt = vtw._video_workflow_prompt(3)
+
+    assert "3 screenshots" in prompt
+    assert "No frozen facts" in prompt
+    assert "{frame_count}" not in prompt
+
+
+# ---------------------------------------------------------------------------
 # API error paths
 # ---------------------------------------------------------------------------
 
@@ -31,30 +44,9 @@ def test_parse_video_requires_file(client) -> None:
     assert "no video" in payload["error"].lower()
 
 
-def test_parse_video_rejects_non_gemini_provider(
-    client, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    for key in ("GEMINI_API_KEY", "GROQ_API_KEY"):
-        monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv("LLM_PROVIDER", "groq")
-    monkeypatch.setenv("GROQ_API_KEY", "test-key")
-
-    data = {
-        "video": (io.BytesIO(b"fake-video-bytes"), "demo.mp4"),
-    }
-    response = client.post(
-        "/api/parse-video", data=data, content_type="multipart/form-data"
-    )
-    payload = response.get_json()
-    assert payload["success"] is False
-    assert "gemini" in payload["error"].lower()
-    assert payload["missing_requirements"] == ["GEMINI_API_KEY"]
-
-
 def test_parse_video_requires_gemini_api_key(
     client, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("LLM_PROVIDER", "gemini")
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
 
     data = {
@@ -66,6 +58,18 @@ def test_parse_video_requires_gemini_api_key(
     payload = response.get_json()
     assert payload["success"] is False
     assert "GEMINI_API_KEY" in payload["error"]
+
+
+def test_parse_video_rejects_non_video_mime(client) -> None:
+    data = {
+        "video": (io.BytesIO(b"not a video"), "evil.exe", "application/x-msdownload"),
+    }
+    response = client.post(
+        "/api/parse-video", data=data, content_type="multipart/form-data"
+    )
+    payload = response.get_json()
+    assert payload["success"] is False
+    assert "Unsupported file type" in payload["error"]
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +150,7 @@ def test_infer_workflow_from_frames_with_mocked_gemini(tmp_path: Path) -> None:
     frame_path.write_bytes(b"\xff\xd8\xff\xe0fake-jpeg")
 
     fake_response = MagicMock()
+    fake_response.candidates = []  # Force plain ``.text`` path (Gemini mocks can be oddly iterable).
     fake_response.text = "1. Do the thing\n2. Send email"
 
     fake_client = MagicMock()
