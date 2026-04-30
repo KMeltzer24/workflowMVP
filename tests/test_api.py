@@ -99,9 +99,9 @@ def test_parse_workflow_repairs_missing_param_when_key_provided(client) -> None:
     repaired = [
         WorkflowStep(
             step_id="step_1",
-            description="Then find the price of spy.",
+            description="Get the current Apple stock price",
             action="fetch_stock_price",
-            parameters={"ticker": "SPY"},
+            parameters={"ticker": "AAPL"},
             dependencies=[],
         )
     ]
@@ -110,7 +110,7 @@ def test_parse_workflow_repairs_missing_param_when_key_provided(client) -> None:
         response = client.post(
             "/api/parse-workflow",
             json={
-                "workflow_text": "1. Then find the price of spy.",
+                "workflow_text": "1. Get the current Apple stock price",
                 "credentials": {"GEMINI_API_KEY": "dummy-key"},
             },
         )
@@ -119,7 +119,7 @@ def test_parse_workflow_repairs_missing_param_when_key_provided(client) -> None:
     payload = response.get_json()
     assert payload["success"] is True
     assert payload["ai_assisted"] is True
-    assert payload["steps"][0]["parameters"]["ticker"] == "SPY"
+    assert payload["steps"][0]["parameters"]["ticker"] == "AAPL"
 
 
 def test_parse_single_step_endpoint(client) -> None:

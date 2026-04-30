@@ -12,6 +12,7 @@ _COMMON_SYMBOL_ALIASES = (
     (re.compile(r"\bnasdaq\s*100\b", re.IGNORECASE), "^NDX"),
     (re.compile(r"\bdow\s+jones\b", re.IGNORECASE), "^DJI"),
     (re.compile(r"\bdjia\b", re.IGNORECASE), "^DJI"),
+    (re.compile(r"\bspy\b", re.IGNORECASE), "SPY"),
 )
 
 

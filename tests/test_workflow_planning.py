@@ -6,7 +6,7 @@ from workflowmvp.services.workflow_planning import parse_rough_workflow
 
 
 def test_missing_required_param_triggers_ai_repair() -> None:
-    result = parse_rough_workflow("1. Then find the price of spy.")
+    result = parse_rough_workflow("1. Get the current Apple stock price")
 
     assert result.steps[0].action == "fetch_stock_price"
     assert result.steps[0].parameters.get("ticker") == ""
