@@ -42,12 +42,6 @@ def _video_workflow_prompt(frame_count: int) -> str:
     return template.format(frame_count=frame_count).strip()
 
 
-def _ensure_parent_dir(path: str) -> None:
-    parent = os.path.dirname(path)
-    if parent:
-        os.makedirs(parent, exist_ok=True)
-
-
 def _resize_for_compare(frame: np.ndarray) -> np.ndarray:
     """Downscale BGR frame for cheaper difference metrics."""
     h, w = frame.shape[:2]
@@ -194,63 +188,3 @@ def infer_workflow_from_frames(frame_paths: List[str], api_key: str, model: Opti
     except Exception:
         logger.exception("Gemini workflow inference failed for video frames")
         return ""
-
-
-def video_to_workflow_txt(video_path: str, output_txt: str, api_key: str, model: Optional[str] = None) -> str:
-    """Convert video to workflow text; writes output file or a fallback on failure."""
-    temp_dir: Optional[str] = None
-    try:
-        logger.info("Processing video: %s", video_path)
-
-        if not os.path.exists(video_path):
-            raise FileNotFoundError(f"Video file not found: {video_path}")
-
-        frames, temp_dir = sample_frames_intelligent(video_path, max_frames=15)
-
-        if not frames:
-            raise ValueError("No frames could be extracted from the video")
-
-        steps_text = infer_workflow_from_frames(frames, api_key, model=model)
-
-        if not steps_text or len(steps_text.strip()) < 10:
-            raise ValueError("AI analysis produced no meaningful workflow")
-
-        _ensure_parent_dir(output_txt)
-        with open(output_txt, "w", encoding="utf-8") as f:
-            f.write(steps_text.strip() + "\n")
-
-        return output_txt
-
-    except Exception as exc:
-        logger.warning("Video processing failed: %s", exc)
-
-        fallback_content = f"""# Video processing failed: {str(exc)}
-
-# Fallback workflow - please edit manually:
-1. Open the application or website shown in your video
-2. Perform the main task or operation you demonstrated
-3. Save or submit any results
-4. Complete the workflow as shown
-
-# To improve results:
-# - Ensure your video shows clear UI interactions
-# - Use a valid GEMINI_API_KEY
-# - Record at a reasonable speed (not too fast)
-# - Show each step clearly before moving to the next
-"""
-
-        try:
-            _ensure_parent_dir(output_txt)
-            with open(output_txt, "w", encoding="utf-8") as f:
-                f.write(fallback_content)
-        except Exception:
-            pass
-
-        raise
-
-    finally:
-        if temp_dir and os.path.exists(temp_dir):
-            try:
-                shutil.rmtree(temp_dir)
-            except Exception:
-                pass
