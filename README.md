@@ -26,6 +26,18 @@ Example workflow:
 3. Send notification with title "Bitcoin" and message "Price saved"
 ```
 
+## Why This Project Matters
+
+This project demonstrates junior SWE skills that are useful on real teams:
+
+- building a full-stack Python web app
+- designing service boundaries around risky operations
+- writing tests for API routes, tools, parsing, and safety behavior
+- integrating LLMs without letting prompts become the whole system
+- using typed validation at the boundary between browser JSON and code generation
+- packaging Python code correctly with subpackages and prompt data
+- maintaining CI with `pytest` and `ruff`
+
 ## Core Architecture
 
 ```mermaid
@@ -119,18 +131,6 @@ Text and video inputs intentionally converge before code generation:
 5. Code generation receives structured, validated steps instead of vague prose.
 
 This keeps the rule parser small and predictable while using the LLM where it is strongest: interpreting ambiguous user intent and normalizing it into concrete tool calls.
-
-## Why This Project Matters
-
-This project demonstrates junior SWE skills that are useful on real teams:
-
-- building a full-stack Python web app
-- designing service boundaries around risky operations
-- writing tests for API routes, tools, parsing, and safety behavior
-- integrating LLMs without letting prompts become the whole system
-- using typed validation at the boundary between browser JSON and code generation
-- packaging Python code correctly with subpackages and prompt data
-- maintaining CI with `pytest` and `ruff`
 
 ## Requirements
 
