@@ -8,13 +8,12 @@ version = "0.2.0"
 description = "Turn screen recordings or prose into executable Python workflows (Flask UI; Google Gemini codegen over a constrained tool registry)."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
 authors = [{ name = "Kevin Meltzer", email = "kevinmeltzer1@gmail.com" }]
 keywords = ["workflow", "automation", "gemini", "ai", "flask"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
@@ -35,6 +34,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    "build>=1.2",
     "pytest>=7.4",
     "pytest-cov>=4.1",
     "ruff>=0.4",

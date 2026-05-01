@@ -143,7 +143,7 @@ def test_parse_workflow_reports_skipped_ai_repair_without_key(
     assert payload["ai_repair"] == {
         "needed": True,
         "attempted": False,
-        "error": "Missing GEMINI_API_KEY; AI repair was skipped.",
+        "error": "Missing GEMINI_API_KEY; AI cleanup was skipped.",
     }
 
 

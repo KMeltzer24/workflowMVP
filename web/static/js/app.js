@@ -539,10 +539,10 @@ function renderParseInsights() {
     const repair = state.parseAiRepair;
     const repairMessage = repair?.needed && !state.parseAiAssisted
         ? repair.error
-            ? `AI repair failed: ${repair.error}`
+            ? "Using rule-first parse; AI cleanup could not improve these steps."
             : repair.attempted
-                ? "AI repair ran but did not improve the parsed steps."
-                : "AI repair was needed but was not attempted."
+                ? "Using rule-first parse; AI cleanup did not change the result."
+                : "Using rule-first parse."
         : "";
     box.innerHTML = `
         <strong>Parse quality:</strong> ${scorePct}% (${mode})
@@ -660,7 +660,7 @@ function formatGenerationFailure(data) {
         ? data.validation_errors.map(formatValidationIssue).filter(Boolean)
         : [];
     const repairError = data?.ai_repair?.error
-        ? `AI repair failed: ${data.ai_repair.error}`
+        ? `AI cleanup failed: ${data.ai_repair.error}`
         : "";
     const details = [...errors, repairError].filter(Boolean);
     if (!details.length) return base;

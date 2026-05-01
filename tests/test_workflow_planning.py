@@ -39,3 +39,20 @@ def test_simple_valid_parse_does_not_trigger_ai_repair() -> None:
     assert result.parse_confidence["missing_param_steps"] == 0
     assert result.parse_confidence["custom_steps"] == 0
     assert result.should_ai_repair is False
+
+
+def test_moderate_confidence_custom_steps_do_not_force_ai_repair() -> None:
+    workflow = """\
+1. Find out when the ani-marathon is at siff.net in Seattle
+2. Write a reminder message with details about the day and time
+3. Email this message to kevinmeltzer1@gmail.com
+4. Then find the price of bitcoin.
+5. Check if it is up or down compared to 5 days ago.
+6. Send the percentage and value up or down to kevinmeltzer1@gmail.com
+"""
+    result = parse_rough_workflow(workflow)
+
+    assert result.parse_confidence["custom_steps"] == 2
+    assert result.parse_confidence["missing_param_steps"] == 0
+    assert result.parse_confidence["score"] >= 0.75
+    assert result.should_ai_repair is False

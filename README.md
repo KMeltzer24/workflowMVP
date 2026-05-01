@@ -6,7 +6,7 @@
 
 WorkflowMVP is a Flask application that turns plain-English workflow descriptions, or a short screen recording, into runnable Python automation scripts.
 
-The project is designed as a practical AI engineering demo: it combines rule-based parsing, Gemini-assisted workflow repair, Gemini code generation, a constrained tool system, subprocess execution, live run logs, and safety checks around generated code.
+The project is designed as a practical AI engineering demo: it combines rule-based parsing, optional Gemini cleanup for ambiguous steps, Gemini code generation, a constrained tool system, subprocess execution, live run logs, and safety checks around generated code.
 
 ## What It Does
 
@@ -34,7 +34,7 @@ flowchart LR
     video_input["Video upload"] --> video["OpenCV frame sampler"]
     video --> vision["Gemini vision prompt"]
     vision --> parser
-    parser --> planner["Shared workflow planner / repair"]
+    parser --> planner["Shared workflow planner / optional cleanup"]
     planner --> validation["Typed step validation"]
     validation --> agent["WorkflowAgent + Gemini codegen"]
     agent --> script["Generated Python script"]
@@ -47,9 +47,9 @@ Key components:
 
 - `main.py` - Flask routes, UI endpoints, workflow generation, and run streaming.
 - `workflowmvp/parser.py` - rule-first parser that creates rough structured workflow steps.
-- `workflowmvp/services/workflow_planning.py` - shared planning boundary that decides when rough text/video steps need Gemini repair before code generation.
+- `workflowmvp/services/workflow_planning.py` - shared planning boundary that decides when rough text/video steps need Gemini cleanup before code generation.
 - `workflowmvp/services/workflow_validation.py` - typed validation layer for step shape, required params, allowed actions, dependencies, and side-effecting tools.
-- `workflowmvp/agent.py` - Gemini-backed step repair and code generator for runnable Python workflows.
+- `workflowmvp/agent.py` - Gemini-backed step cleanup and code generator for runnable Python workflows.
 - `workflowmvp/services/` - runner, credentials, cleanup, path safety, static analysis, planning, and validation helpers.
 - `workflowmvp/tools/` - built-in tool registry used by generated scripts.
 - `workflowmvp/prompts/` - versioned prompt templates for LLM workflows.
@@ -118,8 +118,8 @@ Text and video inputs intentionally converge before code generation:
 
 1. Text input is parsed directly by the rule-first parser.
 2. Video input is sampled into key frames, summarized into rough numbered steps by Gemini vision, then parsed by the same rule-first parser.
-3. The shared planner checks parse quality. Any `custom` step, missing required parameter, or low-confidence parse can trigger one Gemini repair pass.
-4. Repaired steps must pass typed validation before code generation.
+3. The shared planner checks parse quality. Missing required parameters and low-confidence parses can trigger one Gemini cleanup pass; usable rule-first parses continue without the extra LLM call.
+4. Cleaned-up steps must pass typed validation before code generation.
 5. Code generation receives structured, validated steps instead of vague prose.
 
 This keeps the rule parser small and predictable while using the LLM where it is strongest: interpreting ambiguous user intent and normalizing it into concrete tool calls.
@@ -139,11 +139,13 @@ This project demonstrates junior SWE skills that are useful on real teams:
 ## Requirements
 
 - Python 3.11+
-- Google Gemini API key for workflow repair, code generation, and video analysis
+- Google Gemini API key for workflow cleanup, code generation, and video analysis
 
 The rule parser can draft simple text steps without Gemini, but the end-to-end
-app requires `GEMINI_API_KEY`: ambiguous step repair, generated Python, and
+app requires `GEMINI_API_KEY`: ambiguous step cleanup, generated Python, and
 video-to-workflow analysis all use Gemini.
+
+Create a Gemini API key in [Google AI Studio](https://aistudio.google.com/apikey).
 
 ## Setup
 
@@ -159,6 +161,9 @@ pip install ".[dev]"
 cp .env.example .env
 ```
 
+If your system does not have a `python3.11` command, use any Python 3.11+
+interpreter available on your machine, such as `python3`.
+
 Add your Gemini key to `.env`:
 
 ```bash
@@ -169,7 +174,9 @@ GEMINI_MODEL=gemini-2.5-flash
 `GEMINI_MODEL` is optional. If unset, WorkflowMVP uses `gemini-2.5-flash`.
 For regular local development, prefer `.env`; the browser Settings modal is a per-request convenience for demos, testing, or temporarily overriding `.env` values.
 
-SMTP settings are optional and only needed for workflows that send email.
+SMTP settings are optional and only needed for workflows that send email. For
+Gmail, enable two-factor authentication and use an app password as
+`EMAIL_PASSWORD`.
 
 ## Run Locally
 

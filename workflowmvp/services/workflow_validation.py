@@ -103,8 +103,9 @@ def missing_required_params(
 def validate_workflow_steps(raw_steps: object) -> WorkflowValidationResult:
     """Validate and coerce a raw workflow step payload.
 
-    Implementation is intentionally incremental; later steps will wire this
-    validation into the Flask API and tests.
+    This is the last structured boundary before code generation. Routes pass
+    browser JSON through here so generated code only sees known actions,
+    required parameters, and valid dependency shapes.
     """
     errors: List[WorkflowValidationIssue] = []
     warnings: List[WorkflowValidationIssue] = []

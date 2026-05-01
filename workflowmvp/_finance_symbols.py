@@ -18,7 +18,7 @@ def resolve_finance_symbol_hint(text: str) -> str:
 
     This intentionally avoids resolving arbitrary company names. The small
     common set covers identifiers that users reasonably expect to work without
-    AI repair while keeping broad name-to-symbol lookup out of the parser.
+    AI cleanup while keeping broad name-to-symbol lookup out of the parser.
     """
     value = text.strip()
 

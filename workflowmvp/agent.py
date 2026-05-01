@@ -261,8 +261,8 @@ Rule-parser draft (for reference):
             )
         return improved
 
-    @classmethod
-    def required_api_key_name(cls, provider: str) -> str:
+    @staticmethod
+    def required_api_key_name(provider: str) -> str:
         return required_api_key_name(provider)
 
     # ------------------------------------------------------------------

@@ -208,18 +208,18 @@ def _step_to_dict(step: WorkflowStep) -> Dict[str, Any]:
     }
 
 
-def _raw_steps_for_repair(raw_steps: object) -> List[WorkflowStep]:
-    """Best-effort conversion of submitted step JSON for AI repair context."""
+def _raw_steps_for_cleanup(raw_steps: object) -> List[WorkflowStep]:
+    """Best-effort conversion of submitted step JSON for AI cleanup context."""
     if not isinstance(raw_steps, list):
         return []
 
-    repair_steps: List[WorkflowStep] = []
+    cleanup_steps: List[WorkflowStep] = []
     for index, raw_step in enumerate(raw_steps, start=1):
         if not isinstance(raw_step, dict):
             continue
         parameters = raw_step.get("parameters")
         dependencies = raw_step.get("dependencies")
-        repair_steps.append(
+        cleanup_steps.append(
             WorkflowStep(
                 step_id=str(raw_step.get("step_id") or f"step_{index}"),
                 description=str(raw_step.get("description") or "").strip(),
@@ -228,7 +228,7 @@ def _raw_steps_for_repair(raw_steps: object) -> List[WorkflowStep]:
                 dependencies=dependencies if isinstance(dependencies, list) else [],
             )
         )
-    return repair_steps
+    return cleanup_steps
 
 
 def _workflow_text_from_steps(steps: List[WorkflowStep]) -> str:
@@ -317,11 +317,11 @@ def parse_workflow():
         confidence = planning.parse_confidence
 
         ai_assisted = False
-        ai_repair_attempted = False
-        ai_assist_error: Optional[str] = None
+        ai_cleanup_attempted = False
+        ai_cleanup_error: Optional[str] = None
         if planning.should_ai_repair:
             if api_key:
-                ai_repair_attempted = True
+                ai_cleanup_attempted = True
                 try:
                     ai_agent = WorkflowAgent(api_key=api_key, model=model)
                     improved = ai_agent.improve_parsed_steps(workflow_text, steps)
@@ -330,9 +330,9 @@ def parse_workflow():
                         ai_assisted = True
                         confidence = parser.assess_parse_confidence(steps)
                 except Exception as exc:  # pragma: no cover - best effort enhancement
-                    ai_assist_error = str(exc)
+                    ai_cleanup_error = str(exc)
             else:
-                ai_assist_error = "Missing GEMINI_API_KEY; AI repair was skipped."
+                ai_cleanup_error = "Missing GEMINI_API_KEY; AI cleanup was skipped."
 
         response: Dict[str, Any] = {
             "success": True,
@@ -341,8 +341,8 @@ def parse_workflow():
             "ai_assisted": ai_assisted,
             "ai_repair": {
                 "needed": planning.should_ai_repair,
-                "attempted": ai_repair_attempted,
-                "error": ai_assist_error,
+                "attempted": ai_cleanup_attempted,
+                "error": ai_cleanup_error,
             },
             "parse_seconds": round(time.monotonic() - parse_started, 3),
         }
@@ -438,10 +438,10 @@ def parse_video():
         steps = planning.steps
         confidence = planning.parse_confidence
         ai_assisted = False
-        ai_repair_attempted = False
-        ai_assist_error: Optional[str] = None
+        ai_cleanup_attempted = False
+        ai_cleanup_error: Optional[str] = None
         if planning.should_ai_repair:
-            ai_repair_attempted = True
+            ai_cleanup_attempted = True
             try:
                 ai_agent = WorkflowAgent(api_key=api_key, model=model)
                 improved = ai_agent.improve_parsed_steps(workflow_text, steps)
@@ -450,7 +450,7 @@ def parse_video():
                     ai_assisted = True
                     confidence = parser.assess_parse_confidence(steps)
             except Exception as exc:  # pragma: no cover - best effort enhancement
-                ai_assist_error = str(exc)
+                ai_cleanup_error = str(exc)
 
         response: Dict[str, Any] = {
             "success": True,
@@ -460,8 +460,8 @@ def parse_video():
             "ai_assisted": ai_assisted,
             "ai_repair": {
                 "needed": planning.should_ai_repair,
-                "attempted": ai_repair_attempted,
-                "error": ai_assist_error,
+                "attempted": ai_cleanup_attempted,
+                "error": ai_cleanup_error,
             },
             "parse_seconds": round(time.monotonic() - parse_started, 3),
         }
@@ -506,24 +506,24 @@ def generate_workflow():
         model = resolve_gemini_model(creds)
 
         validation = validate_workflow_steps(steps_data)
-        ai_repaired_for_generation = False
-        ai_repair_error: Optional[str] = None
+        ai_cleaned_for_generation = False
+        ai_cleanup_error: Optional[str] = None
         if not validation.valid:
-            repair_steps = _raw_steps_for_repair(steps_data)
-            repair_text = _workflow_text_from_steps(repair_steps)
-            if repair_steps and repair_text:
+            cleanup_steps = _raw_steps_for_cleanup(steps_data)
+            cleanup_text = _workflow_text_from_steps(cleanup_steps)
+            if cleanup_steps and cleanup_text:
                 try:
                     ai_agent = WorkflowAgent(api_key=api_key, model=model)
-                    improved = ai_agent.improve_parsed_steps(repair_text, repair_steps)
+                    improved = ai_agent.improve_parsed_steps(cleanup_text, cleanup_steps)
                     if improved:
                         repaired_validation = validate_workflow_steps(
                             [_step_to_dict(step) for step in improved]
                         )
                         if repaired_validation.valid:
                             validation = repaired_validation
-                            ai_repaired_for_generation = True
+                            ai_cleaned_for_generation = True
                 except Exception as exc:
-                    ai_repair_error = str(exc)
+                    ai_cleanup_error = str(exc)
         validation_warnings = [issue.to_dict() for issue in validation.warnings]
         if not validation.valid:
             return (
@@ -536,8 +536,8 @@ def generate_workflow():
                         ],
                         "validation_warnings": validation_warnings,
                         "ai_repair": {
-                            "attempted": bool(repair_steps and repair_text),
-                            "error": ai_repair_error,
+                            "attempted": bool(cleanup_steps and cleanup_text),
+                            "error": ai_cleanup_error,
                         },
                     }
                 ),
@@ -563,7 +563,7 @@ def generate_workflow():
                 "message": "Workflow generated successfully",
                 "generation_seconds": generation_seconds,
                 "validation_warnings": validation_warnings,
-                "ai_repaired_for_generation": ai_repaired_for_generation,
+                "ai_repaired_for_generation": ai_cleaned_for_generation,
             }
         )
     except Exception as exc:

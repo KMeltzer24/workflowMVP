@@ -8,6 +8,8 @@ from ._base import Tool
 
 
 class AIToolsMixin:
+    """LLM-backed text helpers exposed through the tool registry."""
+
     def _get_llm_client(self):  # type: ignore[no-untyped-def]
         """Memoize LLMClient per ToolRegistry process."""
         client = getattr(self, "_cached_llm_client", None)

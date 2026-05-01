@@ -10,6 +10,8 @@ from ._base import Tool
 
 
 class FinanceToolsMixin:
+    """Financial-market lookup tools exposed through the registry."""
+
     def _register_finance_tools(self) -> None:
         self.register_tool(Tool(
             name="fetch_stock_price",

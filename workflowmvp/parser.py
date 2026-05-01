@@ -1,5 +1,8 @@
-"""
-Workflow Parser - Extracts structured steps from text descriptions
+"""Rule-first workflow parser.
+
+The parser intentionally handles only high-confidence patterns. Ambiguous
+business logic stays as ``custom`` so the planner/code generator can decide
+whether an LLM cleanup pass is worth the cost.
 """
 
 import re
@@ -11,7 +14,8 @@ from workflowmvp._finance_symbols import resolve_finance_symbol_hint
 
 @dataclass
 class WorkflowStep:
-    """Represents a single step in a workflow"""
+    """Structured representation of one parsed workflow step."""
+
     step_id: str
     description: str
     action: str
@@ -21,10 +25,7 @@ class WorkflowStep:
 
 
 class WorkflowParser:
-    """Parses text descriptions into structured workflow steps"""
-
-    def __init__(self):
-        pass
+    """Parse numbered or bulleted prose into rough structured steps."""
 
     REQUIRED_ACTION_PARAMS: Dict[str, List[str]] = {
         "download": ["url"],
@@ -56,7 +57,7 @@ class WorkflowParser:
     }
 
     def parse_workflow(self, workflow_text: str) -> List[WorkflowStep]:
-        """Parse workflow text into structured steps"""
+        """Parse workflow text into ordered workflow steps."""
         steps = []
         lines = workflow_text.strip().split('\n')
 
@@ -71,7 +72,6 @@ class WorkflowParser:
                 i += 1
                 continue
 
-            # Check if this is a new step
             if self._is_step_start(line):
                 if current_step:
                     steps.append(current_step)
@@ -108,7 +108,6 @@ class WorkflowParser:
         if current_step:
             steps.append(current_step)
 
-        # Resolve dependencies
         self._resolve_dependencies(steps)
 
         return steps
@@ -157,7 +156,7 @@ class WorkflowParser:
         }
 
     def _is_step_start(self, line: str) -> bool:
-        """Check if a line starts a new step"""
+        """Return True when a line begins a numbered or bulleted step."""
         patterns = [
             r'^\d+\.',
             r'^Step\s+\d+:',
@@ -179,8 +178,7 @@ class WorkflowParser:
         return stripped.startswith((">", "→", "↳"))
 
     def _extract_description(self, line: str) -> str:
-        """Extract the description from a step line"""
-        # Remove step numbering
+        """Remove leading numbering or bullet markers from a step line."""
         line = re.sub(r'^\d+\.\s*', '', line)
         line = re.sub(r'^Step\s+\d+:\s*', '', line)
         line = re.sub(r'^[-*]\s*', '', line)
@@ -193,10 +191,9 @@ class WorkflowParser:
         containing the substring "read" should not trigger read_file).
         """
         d = description.lower()
-        # Word set for exact-word checks — avoids substring false positives.
         words = set(re.findall(r'\b\w+\b', d))
 
-        # ── Filesystem: directory ops (before file read/write) ───────────────
+        # Directory operations must run before general file read/write matching.
         if ('create' in words or 'make' in words or 'mkdir' in words) and \
                 ('directory' in words or 'folder' in words or 'dir' in words):
             return 'create_directory', self._extract_directory_params(description)
@@ -205,7 +202,6 @@ class WorkflowParser:
                                 'directory' in words or 'folder' in words):
             return 'list_files', self._extract_directory_params(description)
 
-        # ── Network ──────────────────────────────────────────────────────────
         if 'download' in words:
             return 'download', self._extract_url_params(description)
 
@@ -216,7 +212,6 @@ class WorkflowParser:
                 ('api' in words or 'webhook' in words or 'http' in words or 'request' in words):
             return 'http_request', self._extract_url_params(description)
 
-        # ── Finance ──────────────────────────────────────────────────────────
         if ('price' in words or 'stock' in words or 'ticker' in words) and \
                 ('fetch' in words or 'get' in words or 'find' in words or 'check' in words):
             ticker = self._extract_stock_ticker(description)
@@ -225,7 +220,6 @@ class WorkflowParser:
                 'description': description,
             }
 
-        # ── AI text generation ────────────────────────────────────────────────
         _creative = {'poem', 'story', 'message', 'summary', 'haiku', 'limerick',
                      'reminder', 'draft', 'compose', 'generate', 'write'}
         if 'generate_text' in d or \
@@ -233,14 +227,14 @@ class WorkflowParser:
                  'file' not in words and 'csv' not in words):
             return 'generate_text', {'prompt': description, 'description': description}
 
-        # ── Archive: compress/extract (before read/write — "readme.zip" edge) ─
+        # Archive matching must run before general file reads/writes.
         if 'compress' in words or ('zip' in words and ('file' in words or 'files' in words)):
             return 'compress_files', self._extract_compression_params(description)
 
         if 'extract' in words and ('archive' in words or 'zip' in words or 'unzip' in words):
             return 'extract_archive', self._extract_compression_params(description)
 
-        # ── File write (before read — "readme" still contains "read") ─────────
+        # File writes must run before reads so "readme" is not treated as read_file.
         if 'write' in words:
             if 'csv' in words:
                 return 'write_csv', self._extract_file_params(description)
@@ -249,7 +243,6 @@ class WorkflowParser:
                 return 'write_json', {**fp, 'data': {}}
             return 'write_file', self._extract_file_params(description)
 
-        # ── File read ─────────────────────────────────────────────────────────
         if ('read' in words or 'extract' in words) and ('pdf' in words or '.pdf' in d):
             return 'read_pdf', self._extract_file_params(description)
 
@@ -272,7 +265,6 @@ class WorkflowParser:
         if ('current' in words or 'now' in words) and 'time' in words:
             return 'get_current_time', self._extract_time_params(description)
 
-        # ── File ops ─────────────────────────────────────────────────────────
         if 'copy' in words and 'file' in words:
             return 'copy_file', self._extract_file_operation_params(description)
         if 'move' in words and 'file' in words:
@@ -280,7 +272,6 @@ class WorkflowParser:
         if 'delete' in words and 'file' in words:
             return 'delete_file', self._extract_file_params(description)
 
-        # ── Email / notification ──────────────────────────────────────────────
         has_address = bool(re.search(r'[\w.-]+@[\w.-]+\.\w+', description))
         if has_address and (
             'email' in words
@@ -294,13 +285,11 @@ class WorkflowParser:
                 ('send' in words and 'notification' in words):
             return 'send_notification', self._extract_notification_params(description)
 
-        # ── Database ─────────────────────────────────────────────────────────
         if 'database' in words or 'sql' in words or 'sqlite' in words:
             if 'insert' in words or 'add' in words:
                 return 'sqlite_insert', self._extract_database_params(description)
             return 'sqlite_query', self._extract_database_params(description)
 
-        # ── System ───────────────────────────────────────────────────────────
         if 'run' in words and ('command' in words or 'script' in words or 'shell' in words):
             return 'run_command', self._extract_command_params(description)
 
@@ -318,7 +307,6 @@ class WorkflowParser:
         quoted = re.search(r'["\']([^"\']+)["\']', description)
         if quoted:
             return {'directory': quoted.group(1), 'description': description}
-        # fallback: word after "called", "named", or "directory"
         word = re.search(
             r'(?:called|named|directory|folder)\s+["\']?(\S+)["\']?',
             description, re.IGNORECASE,
@@ -326,7 +314,7 @@ class WorkflowParser:
         return {'directory': word.group(1) if word else '', 'description': description}
 
     def _extract_url_params(self, description: str) -> Dict[str, Any]:
-        """Extract URL parameters from description"""
+        """Extract URL parameters from description."""
         url_match = re.search(r'https?://[^\s]+', description)
         return {
             'url': url_match.group() if url_match else '',
@@ -334,7 +322,7 @@ class WorkflowParser:
         }
 
     def _extract_file_params(self, description: str) -> Dict[str, Any]:
-        """Extract file parameters from description"""
+        """Extract file parameters from description."""
         file_match = re.search(r'["\']([^"\']*\.[a-zA-Z0-9]+)["\']', description)
         return {
             'file_path': file_match.group(1) if file_match else '',
@@ -382,7 +370,7 @@ class WorkflowParser:
         return {'timezone': 'UTC', 'description': description}
 
     def _extract_email_params(self, description: str) -> Dict[str, Any]:
-        """Extract email parameters from description"""
+        """Extract email parameters from description."""
         email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', description)
         return {
             'recipient': email_match.group() if email_match else '',
@@ -390,7 +378,7 @@ class WorkflowParser:
         }
 
     def _extract_wait_params(self, description: str) -> Dict[str, Any]:
-        """Extract wait parameters from description"""
+        """Extract wait parameters from description."""
         time_match = re.search(r'(\d+)\s*(second|minute|hour|day)s?', description.lower())
         if time_match:
             value = int(time_match.group(1))
@@ -398,7 +386,7 @@ class WorkflowParser:
             multiplier = {'second': 1, 'minute': 60, 'hour': 3600, 'day': 86400}
             seconds = value * multiplier.get(unit, 1)
         else:
-            seconds = 5  # default
+            seconds = 5
 
         return {
             'seconds': seconds,
@@ -406,8 +394,7 @@ class WorkflowParser:
         }
 
     def _extract_file_operation_params(self, description: str) -> Dict[str, Any]:
-        """Extract file operation parameters (copy, move)"""
-        # Look for "from X to Y" pattern
+        """Extract file operation parameters for copy/move steps."""
         from_match = re.search(r'from\s+["\']?([^"\']+)["\']?\s+to\s+["\']?([^"\']+)["\']?', description)
         if from_match:
             return {
@@ -418,8 +405,7 @@ class WorkflowParser:
         return {'description': description}
 
     def _extract_command_params(self, description: str) -> Dict[str, Any]:
-        """Extract command parameters"""
-        # Look for command in quotes or after "run"
+        """Extract command parameters."""
         cmd_match = re.search(r'["\']([^"\']+)["\']', description)
         if cmd_match:
             return {
@@ -429,8 +415,7 @@ class WorkflowParser:
         return {'description': description}
 
     def _extract_database_params(self, description: str) -> Dict[str, Any]:
-        """Extract database parameters"""
-        # Look for table name and database path
+        """Extract database parameters."""
         table_match = re.search(r'table\s+["\']?(\w+)["\']?', description.lower())
         db_match = re.search(r'database\s+["\']?([^"\']+)["\']?', description.lower())
 
@@ -443,8 +428,7 @@ class WorkflowParser:
         return params
 
     def _extract_compression_params(self, description: str) -> Dict[str, Any]:
-        """Extract compression parameters"""
-        # Look for file patterns and archive path
+        """Extract compression parameters."""
         files_match = re.findall(r'["\']([^"\']*\.[\w]+)["\']', description)
         archive_match = re.search(r'to\s+["\']?([^"\']+)["\']?', description)
 
@@ -457,8 +441,7 @@ class WorkflowParser:
         return params
 
     def _extract_notification_params(self, description: str) -> Dict[str, Any]:
-        """Extract notification parameters"""
-        # Look for title and message
+        """Extract notification parameters."""
         title_match = re.search(r'title[:\s]+["\']?([^"\']+)["\']?', description.lower())
         message_match = re.search(r'message[:\s]+["\']?([^"\']+)["\']?', description.lower())
 
@@ -475,7 +458,7 @@ class WorkflowParser:
         re.IGNORECASE,
     )
 
-    def _resolve_dependencies(self, steps: List[WorkflowStep]):
+    def _resolve_dependencies(self, steps: List[WorkflowStep]) -> None:
         """Link steps only when the user wrote explicit data-flow markers.
 
         We deliberately do NOT chain every step to its predecessor. The agent
