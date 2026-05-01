@@ -30,17 +30,13 @@ Example workflow:
 
 ```mermaid
 flowchart LR
-    text["Text input"] --> parser["WorkflowParser"]
-    video_input["Video upload"] --> video["OpenCV frame sampler"]
-    video --> vision["Gemini vision prompt"]
-    vision --> parser
-    parser --> planner["Shared workflow planner / optional cleanup"]
-    planner --> validation["Typed step validation"]
-    validation --> agent["WorkflowAgent + Gemini codegen"]
-    agent --> script["Generated Python script"]
-    script --> runner["Subprocess runner"]
-    runner --> tools["ToolRegistry"]
-    runner --> logs["SSE logs in browser"]
+    input["Text or video input"] --> planner["Parser + optional Gemini cleanup"]
+    planner --> validation["Typed workflow validation"]
+    validation --> codegen["Gemini code generation"]
+    codegen --> script["Generated Python script"]
+    script --> runner["Sandboxed subprocess runner"]
+    runner --> tools["Curated ToolRegistry"]
+    runner --> logs["Live browser logs"]
 ```
 
 Key components:
