@@ -1,0 +1,7 @@
+ticket_id,name,email,gender,priority,issue
+1041,Maya Chen,maya@example.com,female,high,Login fails after password reset
+1042,Devon Reed,devon@example.com,male,low,Typo on pricing page
+1043,Riley Stone,riley@example.com,male,high,Checkout returns HTTP 500
+1044,Samantha Lee,sam@example.com,female,medium,Exported CSV has missing rows
+1045,Jordan Miles,jordan@example.com,male,medium,Mobile layout breaks on settings page
+1046,Alex Carter,alex@example.com,male,high,Password reset email never arrives
