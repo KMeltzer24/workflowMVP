@@ -62,6 +62,7 @@ Key components:
 - `workflowmvp/tools/` - built-in tool registry used by generated scripts.
 - `workflowmvp/prompts/` - versioned prompt templates for LLM workflows.
 - `web/` - browser UI for creating, generating, and running workflows.
+- `examples/` - sample inputs and recordings for repeatable video-to-workflow demos.
 - `tests/` - pytest coverage for parser, tools, API routes, generated-code validation, and video flow.
 
 ## Tool System
@@ -131,6 +132,16 @@ Text and video inputs intentionally converge before code generation:
 5. Code generation receives structured, validated steps instead of vague prose.
 
 This keeps the rule parser small and predictable while using the LLM where it is strongest: interpreting ambiguous user intent and normalizing it into concrete tool calls.
+
+## Demo Assets
+
+The repo includes repeatable demo assets:
+
+- `examples/inputs/tickets.csv` - sample ticket data used by the file-processing video demo.
+- `examples/videos/BitcoinEmailTest.mp4` - sample recording for a Bitcoin price/email workflow.
+- `examples/videos/DataFileTest.mp4` - sample recording for a local CSV filtering workflow.
+
+These files are intended for testing the video-to-workflow path: upload a sample recording in the UI, let Gemini infer the workflow, then inspect the generated steps and code.
 
 ## Requirements
 
