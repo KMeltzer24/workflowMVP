@@ -235,11 +235,3 @@ HOST=127.0.0.1
 PORT=5050
 WORKFLOW_MAX_UPLOAD_MB=100
 ```
-
-## Notes
-
-WorkflowMVP runs generated Python on the server host. The project includes several guardrails, but it is intended as a local portfolio/demo app, not a multi-tenant production automation platform.
-
-## License
-
-MIT
