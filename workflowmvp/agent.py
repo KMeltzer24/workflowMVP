@@ -464,6 +464,14 @@ Always end with a main() function and:
        main()
 
 Always use RELATIVE file paths ("report.txt", "data/output.csv"). Never hardcode absolute paths or /tmp.
+Generated workflows run from a per-run output directory under `data/temp_outputs`.
+Demo input files from `examples/inputs` are staged into the run directory; if steps
+mention a sample input file, use a path like `examples/inputs/tickets.csv`.
+Preserve input filename extensions from the steps; do not read `tickets.xlsx` when
+the input is `tickets.csv`.
+For outputs, write plain filenames like `filtered_tickets.xlsx` unless the step names
+a subfolder. Do not prefix outputs with `temp_outputs/` because the script already runs
+inside the per-run output directory.
 
 **Imports:** Use the Python **standard library** (`datetime`, **`zoneinfo`**) plus packages **already in** project requirements (e.g. `yfinance` when needed). **Do not import `pytz` or `holidays`** — they are not dependencies. **Do not `import requests` or `bs4`** — use `http_request` / `scrape_webpage` / `discover_urls` via `ToolRegistry`. For IANA timezones use `zoneinfo.ZoneInfo`. For a **nominal** NYSE/Nasdaq regular cash session close, **16:00 America/New_York on weekdays (Mon–Fri)** is acceptable unless steps say otherwise; **market holidays and early closes are not modeled** unless you use an external API or explicit rules in the step text.
 

@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+from workflowmvp.services import paths as service_paths
+from workflowmvp.services import runner
 from workflowmvp.services.runner import build_redactor, secret_values_from_env
 
 
@@ -54,3 +58,22 @@ def test_redactor_handles_overlapping_values_longest_first() -> None:
 
     assert values == ["prefix-secret-token", "secret-token"]
     assert redact("prefix-secret-token secret-token") == "[REDACTED] [REDACTED]"
+
+
+def test_ensure_run_dir_stages_example_inputs(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    inputs_dir = tmp_path / "examples" / "inputs"
+    inputs_dir.mkdir(parents=True)
+    (inputs_dir / "tickets.csv").write_text("id,gender\n1,male\n")
+    outputs_dir = tmp_path / "outputs"
+
+    monkeypatch.setattr(service_paths, "EXAMPLE_INPUTS_DIR", str(inputs_dir))
+    monkeypatch.setattr(service_paths, "TEMP_OUTPUTS_DIR", str(outputs_dir))
+
+    run_dir = Path(runner.ensure_run_dir("abc123"))
+
+    assert (run_dir / "examples" / "inputs" / "tickets.csv").read_text() == (
+        "id,gender\n1,male\n"
+    )

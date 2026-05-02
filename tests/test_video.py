@@ -28,6 +28,9 @@ def test_video_workflow_prompt_loads_template() -> None:
 
     assert "3 screenshots" in prompt
     assert "No frozen facts" in prompt
+    assert "examples/inputs/<filename>" in prompt
+    assert "unchecked values are excluded" in prompt
+    assert "Do not substitute another column or value" in prompt
     assert "{frame_count}" not in prompt
 
 

@@ -95,6 +95,8 @@ def test_system_prompt_has_structural_sections(agent: WorkflowAgent) -> None:
     assert "Do not treat `custom` as \"log and skip\"" in prompt
     assert "April 17 - 30" in prompt
     assert "time not listed" in prompt
+    assert "examples/inputs/tickets.csv" in prompt
+    assert "Do not prefix outputs with `temp_outputs/`" in prompt
 
 
 def test_system_prompt_groups_tools_by_category(agent: WorkflowAgent) -> None:

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 from collections.abc import Iterable
 from typing import Any, Callable, Dict, Optional
@@ -118,7 +119,17 @@ def build_redactor(env: Dict[str, str]) -> Callable[[object], str]:
 def ensure_run_dir(run_id: str) -> str:
     run_dir = os.path.join(_paths.TEMP_OUTPUTS_DIR, run_id)
     os.makedirs(run_dir, exist_ok=True)
+    _stage_example_inputs(run_dir)
     return run_dir
+
+
+def _stage_example_inputs(run_dir: str) -> None:
+    """Copy documented demo inputs into the per-run sandbox."""
+    source = getattr(_paths, "EXAMPLE_INPUTS_DIR", "")
+    if not source or not os.path.isdir(source):
+        return
+    destination = os.path.join(run_dir, "examples", "inputs")
+    shutil.copytree(source, destination, dirs_exist_ok=True)
 
 
 def resolve_workflow_path(raw: str) -> Optional[str]:

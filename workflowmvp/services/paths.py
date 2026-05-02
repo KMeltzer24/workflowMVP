@@ -17,3 +17,6 @@ GENERATED_DIR = os.path.join(PROJECT_ROOT, "data", "generated_workflows")
 
 # Per-run subprocess working directories live under here.
 TEMP_OUTPUTS_DIR = os.path.join(PROJECT_ROOT, "data", "temp_outputs")
+
+# Read-only sample inputs staged into each run directory for video demos.
+EXAMPLE_INPUTS_DIR = os.path.join(PROJECT_ROOT, "examples", "inputs")

@@ -10,6 +10,8 @@ Infer the **outcome** the user wants (what to accomplish), not a play-by-play of
 - **Email:** if mail compose or send appears, end with **send email** using that recipient and subject **themes** from the recording; body instructions must **derive** content from earlier computational steps.
 - **Scope:** automate the goal, not every hover, type, or click. Search + email flows → gather or compute facts, then one email, unless true browser automation is required.
 - **Stable data:** preserve emails, paths, tickers, explicit API URLs, and subject themes visible in the UI.
+- **File workflows:** preserve visible filenames, extensions, columns, and filter values exactly. Do not convert an input CSV into `.xlsx` just because the output is Excel. If only a local demo input filename is visible, write it as `examples/inputs/<filename>` so generated code can read the staged sample file.
+- **Spreadsheet filters:** preserve the exact column whose dropdown/filter menu is opened and the exact checked/unchecked value choices. In checkbox filters, unchecked values are excluded and checked values are kept. If the recording shows one value being unchecked, infer that the output should keep the remaining checked values for that same column. Do not substitute another column or value.
 - **URLs:** prefer explicit feeds or API URLs over long tracked portal URLs when summarizing external content.
 - **Implementability:** each step must be doable with Python stdlib, HTTP, files, email, and this app’s tool layer — **no** reliance on unspecified third-party packages.
 
