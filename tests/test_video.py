@@ -31,6 +31,20 @@ def test_video_workflow_prompt_loads_template() -> None:
     assert "{frame_count}" not in prompt
 
 
+def test_resolve_gemini_model_ignores_blank_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GEMINI_MODEL", "")
+    assert vtw._resolve_gemini_model(None) == vtw.DEFAULT_GEMINI_MODEL
+    assert vtw._resolve_gemini_model("   ") == vtw.DEFAULT_GEMINI_MODEL
+
+
+def test_resolve_gemini_model_prefers_explicit_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-from-env")
+    assert vtw._resolve_gemini_model("gemini-explicit") == "gemini-explicit"
+    assert vtw._resolve_gemini_model(None) == "gemini-from-env"
+
+
 # ---------------------------------------------------------------------------
 # API error paths
 # ---------------------------------------------------------------------------

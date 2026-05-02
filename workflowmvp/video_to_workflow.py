@@ -33,7 +33,11 @@ _GEMINI_VIDEO_MAX_OUTPUT_TOKENS = 2048
 
 
 def _resolve_gemini_model(model: Optional[str]) -> str:
-    return (model or os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)).strip()
+    explicit = (model or "").strip()
+    if explicit:
+        return explicit
+    env_model = (os.getenv("GEMINI_MODEL") or "").strip()
+    return env_model or DEFAULT_GEMINI_MODEL
 
 
 def _video_workflow_prompt(frame_count: int) -> str:
