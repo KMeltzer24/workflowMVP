@@ -29,6 +29,7 @@ def test_defaults_to_gemini_and_default_model(monkeypatch: pytest.MonkeyPatch) -
     _clear_llm_env(monkeypatch)
     client = LLMClient()
     assert client.provider == "gemini"
+    assert DEFAULT_GEMINI_MODEL == "gemini-3.5-flash-lite"
     assert client.model == DEFAULT_GEMINI_MODEL
     assert client.is_configured() is False
 

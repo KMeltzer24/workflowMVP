@@ -158,6 +158,28 @@ def test_get_current_time_utc(registry: ToolRegistry) -> None:
     assert t["unix"] > 0
 
 
+def test_copy_move_delete_and_mkdir(
+    registry: ToolRegistry, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    mkdir = registry.get_tool("create_directory").function(directory="nested")
+    assert mkdir["success"] is True
+    src = tmp_path / "src.txt"
+    src.write_text("payload")
+    copied = registry.get_tool("copy_file").function(
+        source="src.txt", destination="nested/copy.txt"
+    )
+    assert copied["success"] is True
+    assert (tmp_path / "nested" / "copy.txt").read_text() == "payload"
+    moved = registry.get_tool("move_file").function(
+        source="nested/copy.txt", destination="nested/moved.txt"
+    )
+    assert moved["success"] is True
+    deleted = registry.get_tool("delete_file").function(file_path="nested/moved.txt")
+    assert deleted["success"] is True
+    assert not (tmp_path / "nested" / "moved.txt").exists()
+
+
 def test_write_and_read_file_roundtrip(registry: ToolRegistry, tmp_path: Path) -> None:
     write = registry.get_tool("write_file").function
     read = registry.get_tool("read_file").function
@@ -262,21 +284,29 @@ def test_send_email_fails_when_attachment_missing(
     assert "Attachment not found" in (result.get("error") or "")
 
 
+def _ok_http_response(text: str = "ok", content: bytes | None = None) -> MagicMock:
+    response = MagicMock()
+    response.status_code = 200
+    response.ok = True
+    response.reason = "OK"
+    response.text = text
+    response.content = content if content is not None else text.encode()
+    response.headers = {"Content-Type": "text/plain"}
+    response.is_redirect = False
+    response.is_permanent_redirect = False
+    response.raise_for_status = lambda: None
+    return response
+
+
 def test_download_uses_requests(registry: ToolRegistry, monkeypatch: pytest.MonkeyPatch) -> None:
-    class FakeResponse:
-        text = '{"ok": true}'
-        content = b'{"ok": true}'
-
-        def raise_for_status(self) -> None:
-            return None
-
-    def fake_get(url: str, timeout: object = 30, **_: object) -> FakeResponse:
+    def fake_request(method: str, url: str, timeout: object = 30, **_: object) -> MagicMock:
+        assert method == "GET"
         assert url.startswith("http")
         if isinstance(timeout, tuple):
             assert timeout[0] >= 1 and timeout[1] >= 1
         else:
             assert float(timeout) >= 1
-        return FakeResponse()
+        return _ok_http_response('{"ok": true}', b'{"ok": true}')
 
     monkeypatch.setattr(
         "workflowmvp.tools._base.socket.getaddrinfo",
@@ -284,7 +314,7 @@ def test_download_uses_requests(registry: ToolRegistry, monkeypatch: pytest.Monk
             (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))
         ],
     )
-    monkeypatch.setattr("workflowmvp.tools.requests.get", fake_get)
+    monkeypatch.setattr("workflowmvp.tools._base.requests.request", fake_request)
     result = registry.get_tool("download").function(url="https://example.com")
     assert result["success"] is True
     assert result["content"] == '{"ok": true}'
@@ -298,18 +328,11 @@ def test_download_retries_transient_failures(
 ) -> None:
     calls = {"count": 0}
 
-    class FakeResponse:
-        text = "ok"
-        content = b"ok"
-
-        def raise_for_status(self) -> None:
-            return None
-
-    def flaky_get(url: str, timeout: object = 30, **_: object):  # type: ignore[no-untyped-def]
+    def flaky_request(method: str, url: str, timeout: object = 30, **_: object):  # type: ignore[no-untyped-def]
         calls["count"] += 1
         if calls["count"] < 3:
             raise requests.RequestException("transient")
-        return FakeResponse()
+        return _ok_http_response()
 
     monkeypatch.setattr(
         "workflowmvp.tools._base.socket.getaddrinfo",
@@ -317,7 +340,7 @@ def test_download_retries_transient_failures(
             (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))
         ],
     )
-    monkeypatch.setattr("workflowmvp.tools.requests.get", flaky_get)
+    monkeypatch.setattr("workflowmvp.tools._base.requests.request", flaky_request)
     result = registry.get_tool("download").function(url="https://example.com")
     assert result["success"] is True
     assert calls["count"] == 3
@@ -370,13 +393,15 @@ def test_http_request_allows_public_url_with_mocked_request(
     mock_response.text = "ok"
 
     req = MagicMock(return_value=mock_response)
+    mock_response.is_redirect = False
+    mock_response.is_permanent_redirect = False
     monkeypatch.setattr(
         "workflowmvp.tools._base.socket.getaddrinfo",
         lambda *_args, **_kwargs: [
             (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))
         ],
     )
-    monkeypatch.setattr("workflowmvp.tools.network.requests.request", req)
+    monkeypatch.setattr("workflowmvp.tools._base.requests.request", req)
 
     result = registry.get_tool("http_request").function(url="https://example.com")
 
@@ -886,7 +911,7 @@ def test_request_with_retry_uses_short_connect_budget(
     """Avoid hanging ~30s×N on TCP connect; refuse/DNS-style errors skip extra tries."""
     seen: list[Any] = []
 
-    def fake_get(url, timeout=None, headers=None):
+    def fake_request(method, url, timeout=None, headers=None, **kwargs):
         seen.append(timeout)
         raise requests.ConnectionError(
             "HTTPSConnectionPool(host='x', port=443): Max retries exceeded with url: / "
@@ -900,7 +925,7 @@ def test_request_with_retry_uses_short_connect_budget(
             (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))
         ],
     )
-    monkeypatch.setattr("workflowmvp.tools._base.requests.get", fake_get)
+    monkeypatch.setattr("workflowmvp.tools._base.requests.request", fake_request)
     monkeypatch.setattr("workflowmvp.tools._base.time.sleep", lambda *a, **k: None)
 
     with pytest.raises(RuntimeError, match="after 1 attempt"):
@@ -917,14 +942,12 @@ def test_request_with_retry_still_retries_transient_errors(
 ) -> None:
     n = 0
 
-    def fake_get(url, timeout=None, headers=None):
+    def fake_request(method, url, timeout=None, headers=None, **kwargs):
         nonlocal n
         n += 1
         if n < 2:
             raise requests.ReadTimeout("stall")
-        resp = MagicMock()
-        resp.raise_for_status = lambda: None
-        return resp
+        return _ok_http_response()
 
     monkeypatch.setattr(
         "workflowmvp.tools._base.socket.getaddrinfo",
@@ -932,7 +955,7 @@ def test_request_with_retry_still_retries_transient_errors(
             (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))
         ],
     )
-    monkeypatch.setattr("workflowmvp.tools._base.requests.get", fake_get)
+    monkeypatch.setattr("workflowmvp.tools._base.requests.request", fake_request)
     monkeypatch.setattr("workflowmvp.tools._base.time.sleep", lambda *a, **k: None)
     ToolRegistry._request_with_retry("https://example.com/", timeout=30, attempts=3)
     assert n == 2
@@ -948,7 +971,7 @@ def test_sqlite_query_rejects_write_statements(
     )
 
     assert result["success"] is False
-    assert "SELECT or PRAGMA" in result["error"]
+    assert "SELECT" in result["error"]
 
 
 def test_sqlite_insert_rejects_invalid_identifiers(
@@ -963,3 +986,315 @@ def test_sqlite_insert_rejects_invalid_identifiers(
 
     assert result["success"] is False
     assert "Invalid table or column" in result["error"]
+
+
+def test_http_request_rejects_redirect_to_private_ip(
+    registry: ToolRegistry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hops = {"n": 0}
+
+    def fake_getaddrinfo(host, *args, **kwargs):
+        hostname = str(host).rstrip(".").lower()
+        if hostname in {"127.0.0.1", "localhost"}:
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 0))]
+        if hostname == "169.254.169.254":
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("169.254.169.254", 0))]
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
+
+    def fake_request(method, url, timeout=None, headers=None, **kwargs):
+        hops["n"] += 1
+        assert kwargs.get("allow_redirects") is False
+        redirect = MagicMock()
+        redirect.status_code = 302
+        redirect.ok = False
+        redirect.headers = {"Location": "http://127.0.0.1/secret"}
+        redirect.is_redirect = True
+        redirect.is_permanent_redirect = False
+        redirect.raise_for_status = lambda: None
+        return redirect
+
+    monkeypatch.setattr("workflowmvp.tools._base.socket.getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr("workflowmvp.tools._base.requests.request", fake_request)
+
+    result = registry.get_tool("http_request").function(url="https://example.com/start")
+    assert result["success"] is False
+    assert "blocked" in (result.get("error") or "").lower() or "127.0.0.1" in (
+        result.get("error") or ""
+    )
+    assert hops["n"] == 1
+
+
+def test_download_rejects_redirect_to_metadata_ip(
+    registry: ToolRegistry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_getaddrinfo(host, *args, **kwargs):
+        hostname = str(host).rstrip(".").lower()
+        if hostname == "169.254.169.254":
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("169.254.169.254", 0))]
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
+
+    def fake_request(method, url, timeout=None, headers=None, **kwargs):
+        redirect = MagicMock()
+        redirect.status_code = 302
+        redirect.headers = {"Location": "http://169.254.169.254/latest/meta-data"}
+        redirect.is_redirect = True
+        redirect.raise_for_status = lambda: None
+        return redirect
+
+    monkeypatch.setattr("workflowmvp.tools._base.socket.getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr("workflowmvp.tools._base.requests.request", fake_request)
+    result = registry.get_tool("download").function(url="https://example.com/go")
+    assert result["success"] is False
+    assert result["error"]
+
+
+def test_wait_rejects_above_cap(registry: ToolRegistry) -> None:
+    result = registry.get_tool("wait").function(seconds=120)
+    assert result["success"] is False
+    assert "capped" in result["error"]
+
+
+def test_sqlite_query_rejects_pragma(registry: ToolRegistry, tmp_path: Path) -> None:
+    db = tmp_path / "app.db"
+    result = registry.get_tool("sqlite_query").function(
+        database_path=str(db),
+        query="PRAGMA table_info(users)",
+    )
+    assert result["success"] is False
+    assert "SELECT" in result["error"]
+
+
+def test_sqlite_insert_and_select_roundtrip(registry: ToolRegistry, tmp_path: Path) -> None:
+    db = tmp_path / "app.db"
+    conn_create = __import__("sqlite3").connect(db)
+    conn_create.execute("CREATE TABLE users (name TEXT, age INTEGER)")
+    conn_create.close()
+
+    inserted = registry.get_tool("sqlite_insert").function(
+        database_path=str(db),
+        table="users",
+        data=[{"name": "Ada", "age": 36}, {"name": "Grace", "age": 85}],
+    )
+    assert inserted["success"] is True
+
+    queried = registry.get_tool("sqlite_query").function(
+        database_path=str(db),
+        query="SELECT name FROM users WHERE age > ?",
+        params=[40],
+    )
+    assert queried["success"] is True
+    assert queried["results"] == [("Grace",)]
+    assert queried["columns"] == ["name"]
+
+
+def test_sqlite_query_rejects_stacked_statements(
+    registry: ToolRegistry, tmp_path: Path
+) -> None:
+    db = tmp_path / "app.db"
+    result = registry.get_tool("sqlite_query").function(
+        database_path=str(db),
+        query="SELECT 1; DROP TABLE users",
+    )
+    assert result["success"] is False
+    assert "single SELECT" in result["error"]
+
+
+def test_sqlite_insert_dict_row(registry: ToolRegistry, tmp_path: Path) -> None:
+    db = tmp_path / "app.db"
+    conn = __import__("sqlite3").connect(db)
+    conn.execute("CREATE TABLE users (name TEXT)")
+    conn.close()
+    result = registry.get_tool("sqlite_insert").function(
+        database_path=str(db),
+        table="users",
+        data={"name": "Ada"},
+    )
+    assert result["success"] is True
+
+
+def test_sqlite_insert_rejects_empty_list(registry: ToolRegistry, tmp_path: Path) -> None:
+    db = tmp_path / "app.db"
+    result = registry.get_tool("sqlite_insert").function(
+        database_path=str(db),
+        table="users",
+        data=[],
+    )
+    assert result["success"] is False
+    assert "No data" in result["error"]
+
+
+def test_send_email_succeeds_with_mocked_smtp(
+    registry: ToolRegistry, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("EMAIL_USER", "a@b.com")
+    monkeypatch.setenv("EMAIL_PASSWORD", "secret")
+    monkeypatch.setenv("EMAIL_FROM", "a@b.com")
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "note.txt").write_text("hi")
+
+    class FakeSMTP:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.logged_in = False
+
+        def starttls(self) -> None:
+            return None
+
+        def login(self, user: str, password: str) -> None:
+            self.logged_in = True
+
+        def sendmail(self, *args: Any, **kwargs: Any) -> None:
+            return None
+
+        def quit(self) -> None:
+            return None
+
+    monkeypatch.setattr("workflowmvp.tools.notifications.smtplib.SMTP", FakeSMTP)
+    result = registry.get_tool("send_email").function(
+        recipient="x@y.com",
+        subject="t",
+        body="",
+        attachments="note.txt",
+    )
+    assert result["success"] is True
+    assert "x@y.com" in result["result"]
+
+
+def test_send_email_ssl_port(
+    registry: ToolRegistry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("EMAIL_USER", "a@b.com")
+    monkeypatch.setenv("EMAIL_PASSWORD", "secret")
+    monkeypatch.setenv("EMAIL_FROM", "a@b.com")
+
+    class FakeSSL:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            return None
+
+        def login(self, *args: Any, **kwargs: Any) -> None:
+            return None
+
+        def sendmail(self, *args: Any, **kwargs: Any) -> None:
+            return None
+
+        def quit(self) -> None:
+            return None
+
+    monkeypatch.setattr("workflowmvp.tools.notifications.smtplib.SMTP_SSL", FakeSSL)
+    result = registry.get_tool("send_email").function(
+        recipient="x@y.com",
+        subject="t",
+        body="hi",
+        smtp_port=465,
+    )
+    assert result["success"] is True
+
+
+def test_send_notification_skips_without_notify_send(
+    registry: ToolRegistry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("workflowmvp.tools.notifications.os.name", "posix")
+    monkeypatch.setattr("workflowmvp.tools.notifications.sys.platform", "linux")
+    monkeypatch.setattr("workflowmvp.tools.notifications.shutil.which", lambda _name: None)
+    result = registry.get_tool("send_notification").function(
+        title="Hi", message="There"
+    )
+    assert result["success"] is True
+    assert result.get("note")
+
+
+def test_send_notification_osascript_success(
+    registry: ToolRegistry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("workflowmvp.tools.notifications.os.name", "posix")
+    monkeypatch.setattr("workflowmvp.tools.notifications.sys.platform", "darwin")
+
+    def fake_run(*args: Any, **kwargs: Any) -> Any:
+        completed = MagicMock()
+        completed.returncode = 0
+        completed.stderr = ""
+        completed.stdout = ""
+        return completed
+
+    monkeypatch.setattr("workflowmvp.tools.notifications.subprocess.run", fake_run)
+    result = registry.get_tool("send_notification").function(title='Say "hi"', message="ok")
+    assert result["success"] is True
+
+
+def test_generate_text_uses_llm_client(
+    registry: ToolRegistry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class FakeClient:
+        provider = "gemini"
+
+        def is_configured(self) -> bool:
+            return True
+
+        def generate_text(self, prompt: str, max_tokens: int = 1000, temperature: float = 0.7) -> str:
+            assert "haiku" in prompt
+            return "  five seven five  "
+
+    monkeypatch.setattr(ToolRegistry, "_get_llm_client", lambda self: FakeClient())
+    result = registry.get_tool("generate_text").function(prompt="write a haiku", max_tokens=32)
+    assert result["success"] is True
+    assert result["result"] == "five seven five"
+
+
+def test_generate_text_missing_key(registry: ToolRegistry, monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeClient:
+        provider = "gemini"
+
+        def is_configured(self) -> bool:
+            return False
+
+    monkeypatch.setattr(ToolRegistry, "_get_llm_client", lambda self: FakeClient())
+    result = registry.get_tool("generate_text").function(prompt="x")
+    assert result["success"] is False
+    assert "GEMINI_API_KEY" in result["error"]
+
+
+def test_get_current_time_named_zone(registry: ToolRegistry) -> None:
+    result = registry.get_tool("get_current_time").function(timezone="America/New_York")
+    assert result["success"] is True
+    assert result["timezone"] == "America/New_York"
+    assert "T" in result["iso"]
+
+
+def test_get_current_time_invalid_zone(registry: ToolRegistry) -> None:
+    result = registry.get_tool("get_current_time").function(timezone="Not/AZone")
+    assert result["success"] is False
+
+
+def test_wait_rejects_negative(registry: ToolRegistry) -> None:
+    result = registry.get_tool("wait").function(seconds=-1)
+    assert result["success"] is False
+
+
+def test_wait_rejects_non_numeric(registry: ToolRegistry) -> None:
+    result = registry.get_tool("wait").function(seconds="nope")  # type: ignore[arg-type]
+    assert result["success"] is False
+
+
+def test_run_command_blocks_deny_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WORKFLOW_SAFETY_PROFILE", "full")
+    registry = ToolRegistry()
+    tool = registry.get_tool("run_command")
+    assert tool is not None
+    result = tool.function(command="sudo shutdown -h now")
+    assert result["success"] is False
+    assert result.get("blocked") is True
+
+
+def test_run_command_echo_in_full_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WORKFLOW_SAFETY_PROFILE", "full")
+    registry = ToolRegistry()
+    tool = registry.get_tool("run_command")
+    assert tool is not None
+    result = tool.function(command="echo hello-rlimit", timeout=10)
+    assert result["success"] is True
+    assert "hello-rlimit" in (result.get("stdout") or "")
+
+
+def test_applescript_literal_escapes_quotes() -> None:
+    escaped = ToolRegistry._applescript_literal('say "hi"\\path')
+    assert '\\"' in escaped
+    assert "\\\\" in escaped

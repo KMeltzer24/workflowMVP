@@ -8,15 +8,15 @@ PORT ?= 5050
 help:
 	@echo "WorkflowMVP make targets"
 	@echo "  make install   - install runtime dependencies"
-	@echo "  make dev       - install dev dependencies (pytest, ruff)"
+	@echo "  make dev       - install dev dependencies (pytest, ruff, mypy)"
 	@echo "  make run       - start web UI (PORT=$(PORT))"
 	@echo "  make debug     - start web UI with debug logs (PORT=$(PORT))"
-	@echo "  make test      - run the test suite"
-	@echo "  make lint      - run ruff lint"
+	@echo "  make test      - pytest with coverage floor on workflowmvp"
+	@echo "  make lint      - ruff check + mypy workflowmvp"
 	@echo "  make format    - run ruff format"
 	@echo "  make clean     - remove generated workflows, temp outputs, pytest/ruff caches"
 	@echo ""
-	@echo "Codegen uses Google Gemini. Set GEMINI_API_KEY (and optionally GEMINI_MODEL) in .env."
+	@echo "Codegen uses Google Gemini (default gemini-3.5-flash-lite). Set GEMINI_API_KEY in .env."
 	@echo "Override port: make run PORT=5001"
 
 install:
@@ -32,10 +32,11 @@ debug:
 	GEMINI_MODEL="$(GEMINI_MODEL)" $(PYTHON) main.py --debug --port $(PORT)
 
 test:
-	$(PYTHON) -m pytest
+	$(PYTHON) -m pytest --cov=workflowmvp --cov-fail-under=70
 
 lint:
 	$(PYTHON) -m ruff check .
+	$(PYTHON) -m mypy workflowmvp
 
 format:
 	$(PYTHON) -m ruff format .

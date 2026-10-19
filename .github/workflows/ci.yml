@@ -32,8 +32,11 @@ jobs:
       - name: Ruff lint
         run: ruff check .
 
+      - name: Mypy
+        run: mypy workflowmvp
+
       - name: Run pytest with coverage
-        run: pytest -q --cov=workflowmvp --cov-report=term --cov-report=xml
+        run: pytest -q --cov=workflowmvp --cov-report=term --cov-report=xml --cov-fail-under=70
 
       - name: Upload coverage report
         if: matrix.python-version == '3.11'

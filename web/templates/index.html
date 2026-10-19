@@ -13,7 +13,7 @@
             <div>
                 <h1>WorkflowMVP</h1>
                 <p class="subtitle">
-                    Parsed steps &rarr; <strong>Gemini</strong> codegen &rarr; sandboxed Python
+                    Parsed steps &rarr; <strong>Gemini</strong> codegen &rarr; ToolRegistry + rlimits
                 </p>
             </div>
         </div>
@@ -34,10 +34,10 @@
 
         <section class="site-intro" role="region" aria-label="About this project">
             <p>
-                <strong>WorkflowMVP</strong> is an end-to-end <em>constraints-first</em> automation stack:
-                prose (or captured video) becomes structured actions, then <strong>Gemini</strong> emits Python wired to a curated
-                <strong>tool registry</strong> &mdash; the <strong>Tools</strong> tab lists every builtin the server exposes.
-                Parsing starts rule-led, Gemini can clean up ambiguous steps, and scripts validate before write and run under rlimits below.
+                <strong>WorkflowMVP</strong> turns prose or a short recording into structured actions, then
+                <strong>Gemini</strong> emits Python against a curated <strong>tool registry</strong>.
+                Parsing is rule-first, Gemini can repair ambiguous steps, and generated scripts run locally
+                under CPU/memory rlimits &mdash; a constrained demo, not an OS sandbox.
             </p>
         </section>
         <section class="tab-panel active" id="tab-create" role="tabpanel">
@@ -158,7 +158,7 @@
                     <input type="password" name="GEMINI_API_KEY" autocomplete="off">
                 </label>
                 <label>Gemini model
-                    <input type="text" name="GEMINI_MODEL" placeholder="gemini-2.5-flash" autocomplete="off">
+                    <input type="text" name="GEMINI_MODEL" placeholder="gemini-3.5-flash-lite" autocomplete="off">
                 </label>
                 <label>SMTP username
                     <input type="text" name="EMAIL_USER" autocomplete="off">
@@ -208,6 +208,11 @@
     <!-- Toast stack -->
     <div id="toasts" class="toasts" aria-live="polite"></div>
 
+    <script src="{{ url_for('static', filename='js/core.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/tools-tab.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/examples-tab.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/create-tab.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/run-tab.js') }}"></script>
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 </body>
 </html>

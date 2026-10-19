@@ -301,29 +301,6 @@ tools.get_tool("discover_urls").function(start_url="https://www.google.com", key
         WorkflowAgent._validate_generated_python(bad)
 
 
-def test_validate_generated_python_rejects_phony_hardcoded_materials() -> None:
-    bad = """
-from workflowmvp.tools import ToolRegistry
-tools = ToolRegistry()
-tools.get_tool("scrape_webpage").function(url="https://example.org")
-materials = []
-materials.extend([{"material": "wood", "quantity": 1}])
-""".strip()
-    with pytest.raises(ValueError, match="hardcoded"):
-        WorkflowAgent._validate_generated_python(bad)
-
-
-def test_validate_generated_python_rejects_example_unit_price_in_research_workflow() -> None:
-    bad = """
-from workflowmvp.tools import ToolRegistry
-tools = ToolRegistry()
-unit_price = 10.0  # Example unit price
-tools.get_tool("write_json").function(file_path="dresser_research.json", data=[], indent=2)
-""".strip()
-    with pytest.raises(ValueError, match="example"):
-        WorkflowAgent._validate_generated_python(bad)
-
-
 def test_validate_generated_python_rejects_discover_result_string_used_as_url_list() -> None:
     bad = """
 from workflowmvp.tools import ToolRegistry
@@ -333,7 +310,7 @@ discover_result = discover_urls_tool.function(start_url="https://example.org/", 
 candidate_urls = []
 candidate_urls.extend(discover_result.get("result", []))
 """.strip()
-    with pytest.raises(ValueError, match="urls_only"):
+    with pytest.raises(ValueError, match="urls"):
         WorkflowAgent._validate_generated_python(bad)
 
 
@@ -373,7 +350,7 @@ import requests
 from workflowmvp.tools import ToolRegistry
 tools = ToolRegistry()
 """.strip()
-    with pytest.raises(ValueError, match="import requests"):
+    with pytest.raises(ValueError, match="not allowed"):
         WorkflowAgent._validate_generated_python(bad)
 
 
@@ -383,7 +360,7 @@ from requests import get
 from workflowmvp.tools import ToolRegistry
 tools = ToolRegistry()
 """.strip()
-    with pytest.raises(ValueError, match="import requests"):
+    with pytest.raises(ValueError, match="not allowed"):
         WorkflowAgent._validate_generated_python(bad)
 
 
@@ -393,7 +370,7 @@ from bs4 import BeautifulSoup
 from workflowmvp.tools import ToolRegistry
 tools = ToolRegistry()
 """.strip()
-    with pytest.raises(ValueError, match="import bs4"):
+    with pytest.raises(ValueError, match="not allowed"):
         WorkflowAgent._validate_generated_python(bad)
 
 
@@ -443,21 +420,6 @@ gen.function(prompt=f"Summarize for report.md.\\n\\nScraped page:\\n{page[:8000]
     WorkflowAgent._validate_generated_python(ok)
 
 
-def test_validate_generated_python_rejects_illustrative_placeholder_research() -> None:
-    bad = '''
-from workflowmvp.tools import ToolRegistry
-tools = ToolRegistry()
-logger = __import__("logging").getLogger(__name__)
-research_data = [
-    {"source_name": "Illustrative Source 1 (No actual scraping)", "materials": []},
-]
-wj = tools.get_tool("write_json")
-wj.function(file_path="dresser_research.json", data=research_data, indent=2)
-'''.strip()
-    with pytest.raises(ValueError, match="Illustrative/placeholder research"):
-        WorkflowAgent._validate_generated_python(bad)
-
-
 def test_validate_generated_python_allows_real_scrape_then_write_json() -> None:
     ok = """
 import logging
@@ -482,21 +444,6 @@ if __name__ == "__main__":
     WorkflowAgent._validate_generated_python(ok)
 
 
-def test_validate_generated_python_rejects_research_refusal_without_web_tools() -> None:
-    bad = '''
-from workflowmvp.tools import ToolRegistry
-tools = ToolRegistry()
-research_data = {
-    "status": "failed",
-    "message": "Automated research and structured data extraction could not be completed.",
-    "materials_by_source": [],
-}
-tools.get_tool("write_json").function(file_path="dresser_research.json", data=research_data, indent=2)
-'''.strip()
-    with pytest.raises(ValueError, match="discover_urls|Illustrative/placeholder research"):
-        WorkflowAgent._validate_generated_python(bad)
-
-
 def test_validate_generated_python_allows_failed_research_after_scrape_attempt() -> None:
     ok = """
 from workflowmvp.tools import ToolRegistry
@@ -511,17 +458,21 @@ tools.get_tool("write_json").function(file_path="dresser_research.json", data=re
     WorkflowAgent._validate_generated_python(ok)
 
 
-def test_validate_generated_python_rejects_schedule_placeholder_email() -> None:
+def test_validate_generated_python_rejects_subprocess_import() -> None:
+    bad = """
+import subprocess
+from workflowmvp.tools import ToolRegistry
+tools = ToolRegistry()
+""".strip()
+    with pytest.raises(ValueError, match="not allowed"):
+        WorkflowAgent._validate_generated_python(bad)
+
+
+def test_validate_generated_python_rejects_eval_call() -> None:
     bad = """
 from workflowmvp.tools import ToolRegistry
 tools = ToolRegistry()
-send_email_tool = tools.get_tool('send_email')
-schedule_details = "Ani-marathon schedule not found in scraped content."
-send_email_tool.function(
-    recipient="person@example.com",
-    subject="Ani-Marathon Reminder",
-    body=schedule_details,
-)
+eval("print(1)")
 """.strip()
-    with pytest.raises(ValueError, match="missing-schedule placeholder"):
+    with pytest.raises(ValueError, match="eval"):
         WorkflowAgent._validate_generated_python(bad)

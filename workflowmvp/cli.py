@@ -44,4 +44,7 @@ def default_host() -> str:
 
 
 def default_port() -> int:
-    return int(os.getenv("PORT", "5050"))
+    try:
+        return int(os.getenv("PORT", "5050"))
+    except ValueError:
+        return 5050

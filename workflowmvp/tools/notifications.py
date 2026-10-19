@@ -13,10 +13,10 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Any, Dict, List, Optional
 
-from ._base import Tool
+from ._base import P, Tool, _BaseToolRegistry
 
 
-class NotificationToolsMixin:
+class NotificationToolsMixin(_BaseToolRegistry):
     def _register_notification_tools(self) -> None:
         self.register_tool(Tool(
             name="send_email",
@@ -25,16 +25,20 @@ class NotificationToolsMixin:
                 "Optional attachments: list of relative file paths (read from sandbox cwd)."
             ),
             function=self._send_email,
+            category="comms",
+            side_effects=("email",),
             parameters={
-                "recipient": "Email recipient",
-                "subject": "Email subject",
-                "body": "Email body (plain text); use a short line like 'See attached.' when sending files",
-                "attachments": "Optional: list of file paths to attach, or a single path string",
-                "smtp_server": "SMTP server (default: env SMTP_SERVER or smtp.gmail.com)",
-                "smtp_port": "SMTP port (default: env SMTP_PORT or 587)",
-                "email_user": "SMTP username (default: env EMAIL_USER)",
-                "email_password": "SMTP password / app password (default: env EMAIL_PASSWORD)",
-                "email_from": "From address (default: env EMAIL_FROM or email_user)",
+                "recipient": P("Email recipient", required=True),
+                "subject": P("Email subject"),
+                "body": P(
+                    "Email body (plain text); use a short line like 'See attached.' when sending files"
+                ),
+                "attachments": P("Optional: list of file paths to attach, or a single path string"),
+                "smtp_server": P("SMTP server (default: env SMTP_SERVER or smtp.gmail.com)"),
+                "smtp_port": P("SMTP port (default: env SMTP_PORT or 587)"),
+                "email_user": P("SMTP username (default: env EMAIL_USER)"),
+                "email_password": P("SMTP password / app password (default: env EMAIL_PASSWORD)"),
+                "email_from": P("From address (default: env EMAIL_FROM or email_user)"),
             },
             requires_credentials=("EMAIL_USER", "EMAIL_PASSWORD", "EMAIL_FROM"),
         ))
@@ -42,10 +46,12 @@ class NotificationToolsMixin:
             name="send_notification",
             description="Send desktop notification",
             function=self._send_notification,
+            category="comms",
+            side_effects=("notify",),
             parameters={
-                "title": "Notification title",
-                "message": "Notification message",
-                "urgency": "Urgency level (low, normal, critical)",
+                "title": P("Notification title"),
+                "message": P("Notification message"),
+                "urgency": P("Urgency level (low, normal, critical)"),
             },
         ))
 
@@ -103,6 +109,12 @@ class NotificationToolsMixin:
                     "required": missing,
                 }
 
+            smtp_user = str(email_user)
+            smtp_password = str(email_password)
+            smtp_from = str(email_from)
+            smtp_host = str(smtp_server)
+            smtp_port_i = int(smtp_port or 587)
+
             attach_paths: List[str] = []
             if attachments is not None:
                 if isinstance(attachments, str):
@@ -115,7 +127,7 @@ class NotificationToolsMixin:
                 text_body = "See attached."
 
             msg = MIMEMultipart()
-            msg["From"] = email_from
+            msg["From"] = smtp_from
             msg["To"] = recipient
             msg["Subject"] = subject
             msg.attach(MIMEText(text_body, "plain", "utf-8"))
@@ -139,15 +151,15 @@ class NotificationToolsMixin:
 
             attempts = 3
             for attempt in range(1, attempts + 1):
-                server = None
+                server: smtplib.SMTP | smtplib.SMTP_SSL | None = None
                 try:
-                    if smtp_port == 465:
-                        server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=30)
+                    if smtp_port_i == 465:
+                        server = smtplib.SMTP_SSL(smtp_host, smtp_port_i, timeout=30)
                     else:
-                        server = smtplib.SMTP(smtp_server, smtp_port, timeout=30)
+                        server = smtplib.SMTP(smtp_host, smtp_port_i, timeout=30)
                         server.starttls()
-                    server.login(email_user, email_password)
-                    server.sendmail(email_from, recipient, msg.as_string())
+                    server.login(smtp_user, smtp_password)
+                    server.sendmail(smtp_from, recipient, msg.as_string())
                     break
                 except (smtplib.SMTPException, OSError, TimeoutError):
                     if attempt == attempts:
@@ -168,9 +180,9 @@ class NotificationToolsMixin:
                     "recipient": recipient,
                     "subject": subject,
                     "attachments": attach_paths,
-                    "smtp_server": smtp_server,
-                    "smtp_port": smtp_port,
-                    "email_from": email_from,
+                    "smtp_server": smtp_host,
+                    "smtp_port": smtp_port_i,
+                    "email_from": smtp_from,
                 },
             }
         except Exception as e:

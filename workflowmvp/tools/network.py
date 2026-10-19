@@ -8,12 +8,10 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urldefrag, urljoin, urlparse, urlunparse
 
-import requests
-
-from ._base import Tool, _validate_public_http_url
+from ._base import P, Tool, _BaseToolRegistry
 
 
-class NetworkToolsMixin:
+class NetworkToolsMixin(_BaseToolRegistry):
     """HTTP-shaped primitives: pull bytes, scrape pages, discover URLs."""
 
     _SCRAPE_MAX_CHARS = 4000
@@ -24,13 +22,16 @@ class NetworkToolsMixin:
     # ----- registration ---------------------------------------------------
 
     def _register_network_tools(self) -> None:
+        net = "network"
         self.register_tool(Tool(
             name="download",
             description="Download content from a URL",
             function=self._download,
+            category=net,
+            side_effects=("network", "write"),
             parameters={
-                "url": "URL to download from",
-                "output_file": "Optional output file path",
+                "url": P("URL to download from", required=True),
+                "output_file": P("Optional output file path"),
             },
         ))
         self.register_tool(Tool(
@@ -41,12 +42,14 @@ class NetworkToolsMixin:
                 "Supports custom headers and a JSON or text body."
             ),
             function=self._http_request,
+            category=net,
+            side_effects=("network",),
             parameters={
-                "url": "Target URL",
-                "method": "HTTP method: GET, POST, PUT, PATCH, DELETE (default: GET)",
-                "body": "Request body as a dict (sent as JSON) or string (sent as text). Optional.",
-                "headers": "Extra headers as a dict (e.g. {'Authorization': 'Bearer token'}). Optional.",
-                "timeout": "Timeout in seconds (default: 30)",
+                "url": P("Target URL", required=True),
+                "method": P("HTTP method: GET, POST, PUT, PATCH, DELETE (default: GET)"),
+                "body": P("Request body as a dict (sent as JSON) or string (sent as text). Optional."),
+                "headers": P("Extra headers as a dict (e.g. {'Authorization': 'Bearer token'}). Optional."),
+                "timeout": P("Timeout in seconds (default: 30)"),
             },
         ))
         self.register_tool(Tool(
@@ -56,10 +59,15 @@ class NetworkToolsMixin:
                 "with a 'url' key (the whole entry is accepted for convenience)."
             ),
             function=self._scrape_webpage,
+            category=net,
+            side_effects=("network",),
             parameters={
-                "url": "URL string, or {'url': 'https://...', 'score': n} from discover_urls",
-                "selector": "Optional CSS selector for targeted extraction",
-                "extract_text": "Whether to return visible text instead of raw HTML (default: True)",
+                "url": P(
+                    "URL string, or {'url': 'https://...', 'score': n} from discover_urls",
+                    required=True,
+                ),
+                "selector": P("Optional CSS selector for targeted extraction"),
+                "extract_text": P("Whether to return visible text instead of raw HTML (default: True)"),
             },
         ))
         self.register_tool(Tool(
@@ -73,14 +81,16 @@ class NetworkToolsMixin:
                 "(plain strings). The **result** field is a JSON debug string — not a list of URLs."
             ),
             function=self._discover_urls,
+            category=net,
+            side_effects=("network",),
             parameters={
-                "start_url": "Entry URL (e.g. https://www.example.org/)",
-                "keywords": (
+                "start_url": P("Entry URL (e.g. https://www.example.org/)", required=True),
+                "keywords": P(
                     "Optional: string or list of words to rank URLs (e.g. 'dresser plans' or ['dresser', 'plans'])"
                 ),
-                "max_results": "Max URLs to return (default 15, cap 50)",
-                "use_sitemap": "If true (default), try /sitemap.xml and /sitemap_index.xml",
-                "use_page_links": "If true (default), extract same-origin links from start_url HTML",
+                "max_results": P("Max URLs to return (default 15, cap 50)"),
+                "use_sitemap": P("If true (default), try /sitemap.xml and /sitemap_index.xml"),
+                "use_page_links": P("If true (default), extract same-origin links from start_url HTML"),
             },
         ))
 
@@ -115,8 +125,6 @@ class NetworkToolsMixin:
             method = method.upper()
             if method not in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"}:
                 return {"success": False, "error": f"Unsupported HTTP method: {method}"}
-            _validate_public_http_url(url)
-
             req_headers = {**self._BROWSER_HEADERS, **(headers or {})}
             kwargs: Dict[str, Any] = {"timeout": timeout, "headers": req_headers}
             if body is not None:
@@ -126,7 +134,7 @@ class NetworkToolsMixin:
                 else:
                     kwargs["data"] = str(body)
 
-            response = requests.request(method, url, **kwargs)
+            response = self._request_public_http(method, url, **kwargs)
             content_type = response.headers.get("Content-Type", "")
             if "application/json" in content_type:
                 try:
@@ -330,7 +338,7 @@ class NetworkToolsMixin:
 
             soup = BeautifulSoup(html, "html.parser")
             for a in soup.find_all("a", href=True):
-                href = (a.get("href") or "").strip()
+                href = str(a.get("href") or "").strip()
                 if not href or href.startswith("#") or href.lower().startswith("javascript:"):
                     continue
                 full = urljoin(start_url, href)

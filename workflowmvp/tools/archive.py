@@ -6,29 +6,33 @@ import os
 import zipfile
 from typing import Any, Dict, List, Optional
 
-from ._base import Tool
+from ._base import P, Tool, _BaseToolRegistry
 
 
-class ArchiveToolsMixin:
+class ArchiveToolsMixin(_BaseToolRegistry):
     def _register_archive_tools(self) -> None:
         self.register_tool(Tool(
             name="compress_files",
             description="Compress files into ZIP archive",
             function=self._compress_files,
+            category="archive",
+            side_effects=("write",),
             parameters={
-                "files": "List of file paths to compress",
-                "archive_path": "Path for the ZIP archive",
-                "include_dirs": "Include directory structure (default: True)",
+                "files": P("List of file paths to compress"),
+                "archive_path": P("Path for the ZIP archive", required=True),
+                "include_dirs": P("Include directory structure (default: True)"),
             },
         ))
         self.register_tool(Tool(
             name="extract_archive",
             description="Extract files from ZIP archive",
             function=self._extract_archive,
+            category="archive",
+            side_effects=("write",),
             parameters={
-                "archive_path": "Path to ZIP archive",
-                "extract_to": "Directory to extract to",
-                "password": "Archive password (optional)",
+                "archive_path": P("Path to ZIP archive", required=True),
+                "extract_to": P("Directory to extract to", required=True),
+                "password": P("Archive password (optional)"),
             },
         ))
 

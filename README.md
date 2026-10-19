@@ -2,23 +2,25 @@
 
 [![ci](https://github.com/KMeltzer24/workflowMVP/actions/workflows/ci.yml/badge.svg)](https://github.com/KMeltzer24/workflowMVP/actions/workflows/ci.yml)
 [![python](https://img.shields.io/badge/python-3.11%2B-blue)](#requirements)
-[![license](https://img.shields.io/badge/license-MIT-green)](#license)
+[![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-WorkflowMVP is a Flask application that turns plain-English workflow descriptions, or a short screen recording, into runnable Python automation scripts.
+WorkflowMVP is a local Flask demo that turns numbered prose, or a short screen recording, into a Python script wired to a curated `ToolRegistry`.
 
-The project is designed as a practical AI engineering demo: it combines rule-based parsing, optional Gemini cleanup for ambiguous steps, Gemini code generation, a constrained tool system, subprocess execution, live run logs, and safety checks around generated code.
+It is an AI-engineering sample, not a hosted automation platform. Rule-based parsing, optional Gemini cleanup, typed step validation, Gemini code generation, subprocess rlimits, live run logs, and an AST import policy all sit in front of **trusted local execution**. Generated Python is still a process on your machine.
 
 ## What It Does
 
-Users can:
-
 1. Describe a workflow in numbered steps, or upload a screen recording.
 2. Parse the workflow into structured actions.
-3. Generate Python code from those actions.
-4. Run the generated workflow from the browser.
-5. Stream stdout/stderr logs live through Server-Sent Events.
+3. Generate Python that calls built-in tools instead of inventing I/O from scratch.
+4. Run that script from the browser.
+5. Stream stdout/stderr through Server-Sent Events.
 
-Example workflow:
+![Parse a numbered workflow in the Create tab](docs/images/ui-create.png)
+
+The UI is vanilla JavaScript split by tab (`web/static/js/core.js`, `create-tab.js`, `run-tab.js`, `examples-tab.js`, `tools-tab.js`, `app.js`) with no bundler.
+
+Example:
 
 ```text
 1. Download https://api.coinbase.com/v2/prices/BTC-USD/spot
@@ -26,19 +28,15 @@ Example workflow:
 3. Send notification with title "Bitcoin" and message "Price saved"
 ```
 
-## Why This Project Matters
+## Design
 
-This project demonstrates junior SWE skills that are useful on real teams:
+The interesting part is the boundary between the model and the runtime:
 
-- building a full-stack Python web app
-- designing service boundaries around risky operations
-- writing tests for API routes, tools, parsing, and safety behavior
-- integrating LLMs without letting prompts become the whole system
-- using typed validation at the boundary between browser JSON and code generation
-- packaging Python code correctly with subpackages and prompt data
-- maintaining CI with `pytest` and `ruff`
-
-## Core Architecture
+- numbered text (or video frames) becomes structured steps
+- a planner decides when Gemini should repair a weak parse
+- typed validation rejects unknown actions and missing required parameters
+- codegen emits Python against a fixed tool list
+- a subprocess runs that file with CPU/RSS/file-size rlimits, a per-run working directory, and log redaction
 
 ```mermaid
 flowchart LR
@@ -46,43 +44,42 @@ flowchart LR
     planner --> validation["Typed workflow validation"]
     validation --> codegen["Gemini code generation"]
     codegen --> script["Generated Python script"]
-    script --> runner["Sandboxed subprocess runner"]
+    script --> runner["Constrained subprocess runner"]
     runner --> tools["Curated ToolRegistry"]
     runner --> logs["Live browser logs"]
 ```
 
-Key components:
+Key paths:
 
-- `main.py` - Flask routes, UI endpoints, workflow generation, and run streaming.
-- `workflowmvp/parser.py` - rule-first parser that creates rough structured workflow steps.
-- `workflowmvp/services/workflow_planning.py` - shared planning boundary that decides when rough text/video steps need Gemini cleanup before code generation.
-- `workflowmvp/services/workflow_validation.py` - typed validation layer for step shape, required params, allowed actions, dependencies, and side-effecting tools.
-- `workflowmvp/agent.py` - Gemini-backed step cleanup and code generator for runnable Python workflows.
-- `workflowmvp/services/` - runner, credentials, cleanup, path safety, static analysis, planning, and validation helpers.
-- `workflowmvp/tools/` - built-in tool registry used by generated scripts.
-- `workflowmvp/prompts/` - versioned prompt templates for LLM workflows.
-- `web/` - browser UI for creating, generating, and running workflows.
-- `examples/` - sample inputs and recordings for repeatable video-to-workflow demos.
-- `tests/` - pytest coverage for parser, tools, API routes, generated-code validation, and video flow.
+- `main.py` — CLI (`python main.py`). Signal handlers and cleanup register here only.
+- `workflowmvp/app.py` — `create_app()`; gunicorn target is `workflowmvp.app:app`.
+- `workflowmvp/blueprints/` — HTTP routes (pages, tools/examples, parse/video, generate, run).
+- `workflowmvp/parser.py` — rule-first parser for numbered/bulleted steps.
+- `workflowmvp/services/workflow_planning.py` — shared text/video planning boundary.
+- `workflowmvp/services/workflow_validation.py` — step shape, required params, allowed actions.
+- `workflowmvp/agent.py` — Gemini cleanup and code generation.
+- `workflowmvp/services/code_policy.py` — AST import/call policy on generated scripts.
+- `workflowmvp/tools/` — built-in registry used by generated scripts.
+- `web/` — browser UI (`web/static/js/` is vanilla JS, one file per tab).
+- `examples/` — sample CSV and recordings.
+- `tests/` — pytest for parser, tools, API, codegen validation, and video framing.
 
 ## Tool System
 
-The tool system is the main design feature. Generated scripts call a curated `ToolRegistry` instead of inventing file, network, email, database, and parsing logic from scratch. This keeps AI-generated code smaller, safer, and easier to test.
+Generated scripts call `ToolRegistry` instead of inventing file, network, email, and parsing logic. The registry currently exposes 34 built-in tools:
 
-The registry currently exposes 34 built-in tools:
-
-| Category | Tools | What They Do |
+| Category | Tools | What they do |
 | --- | --- | --- |
-| Files | `read_file`, `write_file`, `append_file`, `list_files`, `create_directory`, `copy_file`, `move_file`, `delete_file`, `hash_file` | Basic sandboxed file and directory operations. |
-| Structured files | `read_csv`, `write_csv`, `read_json`, `write_json`, `read_xlsx`, `write_xlsx`, `read_pdf` | Read/write common data formats and extract PDF text. |
-| Network | `download`, `http_request`, `scrape_webpage`, `discover_urls` | Fetch public HTTP content, call APIs, scrape readable page text, and discover same-site URLs. |
-| AI and templates | `generate_text`, `render_template` | Generate Gemini text output or render deterministic Jinja2 templates. |
-| Text processing | `extract_regex`, `replace_text`, `split_text` | Perform deterministic text extraction and transformation without another LLM call. |
-| Communication | `send_email`, `send_notification` | Send SMTP email or local desktop notifications. |
-| Data and finance | `sqlite_query`, `sqlite_insert`, `fetch_stock_price` | Work with local SQLite databases and retrieve recent market prices. |
-| Time and archives | `wait`, `get_current_time`, `compress_files`, `extract_archive` | Handle timing, timestamps, ZIP creation, and ZIP extraction. |
+| Files | `read_file`, `write_file`, `append_file`, `list_files`, `create_directory`, `copy_file`, `move_file`, `delete_file`, `hash_file` | File and directory operations inside the per-run output directory. |
+| Structured files | `read_csv`, `write_csv`, `read_json`, `write_json`, `read_xlsx`, `write_xlsx`, `read_pdf` | Common data formats and PDF text. |
+| Network | `download`, `http_request`, `scrape_webpage`, `discover_urls` | Public HTTP fetch, APIs, readable page text, same-site URL discovery. |
+| AI and templates | `generate_text`, `render_template` | Gemini text or Jinja2 templates. |
+| Text processing | `extract_regex`, `replace_text`, `split_text` | Deterministic text transforms. |
+| Communication | `send_email`, `send_notification` | SMTP email or local desktop notifications. |
+| Data and finance | `sqlite_query`, `sqlite_insert`, `fetch_stock_price` | Local SQLite and recent market prices. |
+| Time and archives | `wait`, `get_current_time`, `compress_files`, `extract_archive` | Timing, timestamps, ZIP create/extract. |
 
-Each tool returns a normalized response envelope:
+Normalized tool envelope:
 
 ```python
 {
@@ -93,9 +90,7 @@ Each tool returns a normalized response envelope:
 }
 ```
 
-`result` is the primary output. `meta` stores details such as file paths, row counts, status codes, URLs, sheet names, or tool names. Older compatibility fields like `content`, `data`, `message`, `files`, or `rows` may still be present, but new generated code should prefer `result` and `meta`.
-
-Example generated-code usage:
+Prefer `result` and `meta`. Older keys such as `content` or `data` may still appear.
 
 ```python
 tools = ToolRegistry()
@@ -108,51 +103,28 @@ else:
     print(response["error"])
 ```
 
-The registry also includes practical safety controls:
-
-- Generated workflows run in per-run output directories.
-- File tools enforce sandbox path boundaries during runs.
-- Network tools block localhost, private IPs, metadata IPs, and non-HTTP schemes.
-- Side-effecting tools such as email, file writes, HTTP requests, SQLite writes, and archive extraction are surfaced during workflow validation.
-- Credential-aware tools advertise required settings such as `GEMINI_API_KEY` or SMTP variables.
-- Shell execution is disabled by default and only appears when `WORKFLOW_SAFETY_PROFILE=full`.
-- Run logs redact known secret values before returning stdout/stderr to the UI.
-- Generated code is compiled and checked against known tool-contract mistakes before saving.
-
-From an engineering perspective, the registry is intentionally simple: each tool is a small Python function wrapped by a shared response normalizer, with tests covering safety rules, parsing contracts, and common success/failure paths.
-
 ## Planning Flow
 
-Text and video inputs intentionally converge before code generation:
-
-1. Text input is parsed directly by the rule-first parser.
-2. Video input is sampled into key frames, summarized into rough numbered steps by Gemini vision, then parsed by the same rule-first parser.
-3. The shared planner checks parse quality. Missing required parameters and low-confidence parses can trigger one Gemini cleanup pass; usable rule-first parses continue without the extra LLM call.
-4. Cleaned-up steps must pass typed validation before code generation.
-5. Code generation receives structured, validated steps instead of vague prose.
-
-This keeps the rule parser small and predictable while using the LLM where it is strongest: interpreting ambiguous user intent and normalizing it into concrete tool calls.
+1. Text is parsed by the rule-first parser.
+2. Video is sampled into key frames, summarized by Gemini vision, then parsed by the same parser.
+3. Missing required parameters or low confidence can trigger one Gemini cleanup pass.
+4. Steps must pass typed validation before code generation.
+5. Codegen receives structured steps, not raw prose.
 
 ## Demo Assets
 
-The repo includes repeatable demo assets:
-
-- `examples/inputs/tickets.csv` - sample ticket data used by the file-processing video demo.
-- `examples/videos/BitcoinEmailTest.mp4` - sample recording for a Bitcoin price/email workflow.
-- `examples/videos/DataFileTest.mp4` - sample recording for a local CSV filtering workflow.
-
-These files are intended for testing the video-to-workflow path: upload a sample recording in the UI, let Gemini infer the workflow, then inspect the generated steps and code.
+- `examples/inputs/tickets.csv` — sample ticket data for the file-processing video.
+- `examples/videos/BitcoinEmailTest.mp4` — Bitcoin price/email recording.
+- `examples/videos/DataFileTest.mp4` — local CSV filtering recording.
 
 ## Requirements
 
 - Python 3.11+
-- Google Gemini API key for workflow cleanup, code generation, and video analysis
+- A Google Gemini API key for cleanup, code generation, and video analysis
 
-The rule parser can draft simple text steps without Gemini, but the end-to-end
-app requires `GEMINI_API_KEY`: ambiguous step cleanup, generated Python, and
-video-to-workflow analysis all use Gemini.
+The rule parser can draft simple text steps without Gemini. End-to-end generation and video analysis need `GEMINI_API_KEY`.
 
-Create a Gemini API key in [Google AI Studio](https://aistudio.google.com/apikey).
+Create a key in [Google AI Studio](https://aistudio.google.com/apikey).
 
 ## Setup
 
@@ -168,22 +140,16 @@ pip install ".[dev]"
 cp .env.example .env
 ```
 
-If your system does not have a `python3.11` command, use any Python 3.11+
-interpreter available on your machine, such as `python3`.
-
-Add your Gemini key to `.env`:
+If you do not have `python3.11`, use any 3.11+ interpreter (`python3`).
 
 ```bash
 GEMINI_API_KEY=your_key_here
-GEMINI_MODEL=gemini-2.5-flash
+GEMINI_MODEL=gemini-3.5-flash-lite
 ```
 
-`GEMINI_MODEL` is optional. If unset, WorkflowMVP uses `gemini-2.5-flash`.
-For regular local development, prefer `.env`; the browser Settings modal is a per-request convenience for demos, testing, or temporarily overriding `.env` values.
+`GEMINI_MODEL` is optional and defaults to `gemini-3.5-flash-lite` (cost-efficient Flash-Lite with vision). For higher-quality codegen, set `GEMINI_MODEL=gemini-3.8-flash`. Prefer `.env` for local work; the Settings modal is a per-request override for demos.
 
-SMTP settings are optional and only needed for workflows that send email. For
-Gmail, enable two-factor authentication and use an app password as
-`EMAIL_PASSWORD`.
+SMTP is optional and only needed for `send_email`. For Gmail, use an app password as `EMAIL_PASSWORD`.
 
 ## Run Locally
 
@@ -191,13 +157,7 @@ Gmail, enable two-factor authentication and use an app password as
 make run
 ```
 
-Open:
-
-```text
-http://127.0.0.1:5050
-```
-
-Alternative:
+Open `http://127.0.0.1:5050`.
 
 ```bash
 python main.py --port 5001 --debug
@@ -205,32 +165,49 @@ python main.py --port 5001 --debug
 
 ## Development
 
-Run tests and lint:
+```bash
+make test    # pytest with an 80% coverage floor on workflowmvp
+make lint    # ruff + mypy
+make format
+```
+
+Equivalent:
 
 ```bash
 .venv/bin/python -m pytest
 .venv/bin/ruff check .
+.venv/bin/mypy workflowmvp
 ```
-
-Build the package:
 
 ```bash
 .venv/bin/python -m build
-```
-
-Clean generated artifacts:
-
-```bash
 make clean
 ```
 
+CI (`.github/workflows/ci.yml`) runs ruff, mypy, and pytest on Python 3.11 and 3.12.
+
+## Docker (optional)
+
+The image binds gunicorn to `0.0.0.0:5050`. Treat that like exposing the app on the host network: anyone who can reach the port can generate and run Python as the container user.
+
+```bash
+docker build -t workflowmvp .
+docker run --rm -p 127.0.0.1:5050:5050 --env-file .env workflowmvp
+```
+
+Demo videos are excluded from the image (`.dockerignore`). Sample CSV input is included.
+
+## Contributing
+
+This is a personal demo repo. Useful PRs: tests, tool-contract bugs, docs that match the code. Run `make lint` and `make test` before opening a PR. Do not commit `.env`, API keys, or generated files under `data/`.
+
 ## Environment Variables
 
-Common variables:
+Secrets (also listed in `.env.example`):
 
 ```bash
 GEMINI_API_KEY=...
-GEMINI_MODEL=gemini-2.5-flash  # optional; default when unset
+GEMINI_MODEL=gemini-3.5-flash-lite  # optional; gemini-3.8-flash for stronger codegen
 
 EMAIL_USER=...
 EMAIL_PASSWORD=...
@@ -239,10 +216,38 @@ SMTP_SERVER=smtp.gmail.com
 SMTP_PORT=587
 ```
 
-Server defaults:
+Server and safety (defaults shown):
 
 ```bash
 HOST=127.0.0.1
 PORT=5050
 WORKFLOW_MAX_UPLOAD_MB=100
+WORKFLOW_SAFETY_PROFILE=safe          # safe | full (full registers run_command)
+WORKFLOW_RLIMIT_CPU=120               # subprocess CPU seconds
+WORKFLOW_RLIMIT_AS_MB=1024            # address-space cap
+WORKFLOW_RLIMIT_FSIZE_MB=100          # max file size written by the child
+WORKFLOW_DISABLE_RLIMIT=0             # 1 disables POSIX rlimits
+WORKFLOW_ENABLE_BLOCKING_RUN_ENDPOINT=0
+WORKFLOW_HTTP_CONNECT_TIMEOUT=8
 ```
+
+## Limitations
+
+- Bind to localhost unless you trust everyone on the network. Anyone who can POST can generate and run Python as your user.
+- File tools stay under `WORKFLOW_OUTPUT_DIR` (the per-run directory). Raw `open()` in generated code does not.
+- Network tools block localhost, private, link-local, and metadata addresses, including redirect hops. `yfinance` and other allowed imports can still reach the public internet.
+- There is no OS jail, seccomp, or RestrictedPython. Constraints are rlimits, path checks on tools, URL policy, and an AST import/call denylist.
+- Gemini is required for codegen, video, and ambiguous-step cleanup.
+
+## Security
+
+Treat this as a local demo:
+
+- Do not expose `--host 0.0.0.0` or the Docker bind on an untrusted network.
+- Credentials in Settings live in `sessionStorage` and are sent on API requests; `.env` is the durable store.
+- Run logs redact known secret values (`GEMINI_API_KEY`, `EMAIL_PASSWORD`) before they return to the UI.
+- Shell (`run_command`) is off unless `WORKFLOW_SAFETY_PROFILE=full`.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

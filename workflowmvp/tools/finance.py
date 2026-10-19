@@ -6,10 +6,10 @@ from typing import Any, Dict
 
 from workflowmvp._finance_symbols import resolve_finance_symbol_hint
 
-from ._base import Tool
+from ._base import P, Tool, _BaseToolRegistry
 
 
-class FinanceToolsMixin:
+class FinanceToolsMixin(_BaseToolRegistry):
     """Financial-market lookup tools exposed through the registry."""
 
     def _register_finance_tools(self) -> None:
@@ -21,9 +21,11 @@ class FinanceToolsMixin:
                 "Returns price, currency, and metadata."
             ),
             function=self._fetch_stock_price,
+            category="finance",
+            side_effects=("network",),
             parameters={
-                "ticker": "Ticker symbol (e.g. '^GSPC', 'AAPL', 'BTC-USD')",
-                "period": "Data period: '1d', '5d', '1mo', etc. (default: '1d')",
+                "ticker": P("Ticker symbol (e.g. '^GSPC', 'AAPL', 'BTC-USD')", required=True),
+                "period": P("Data period: '1d', '5d', '1mo', etc. (default: '1d')"),
             },
         ))
 

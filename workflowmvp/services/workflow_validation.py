@@ -91,7 +91,7 @@ def missing_required_params(
     tool = (tools_by_action or {}).get(step.action)
     required = (
         _metadata_required_params(tool)
-        or WorkflowParser.REQUIRED_ACTION_PARAMS.get(step.action, [])
+            or WorkflowParser.required_action_params_map().get(step.action, [])
     )
     return [
         key
@@ -208,6 +208,11 @@ def validate_workflow_steps(raw_steps: object) -> WorkflowValidationResult:
         action_valid = isinstance(action, str) and action.strip() in valid_actions
 
         if shape_valid and action_valid:
+            assert isinstance(step_id, str)
+            assert isinstance(description, str)
+            assert isinstance(action, str)
+            assert isinstance(parameters, dict)
+            assert isinstance(dependencies, list)
             step = WorkflowStep(
                 step_id=step_id.strip(),
                 description=description.strip(),
@@ -224,7 +229,8 @@ def validate_workflow_steps(raw_steps: object) -> WorkflowValidationResult:
                         action=step.action,
                     )
                 )
-            if step.action in SIDE_EFFECTING_ACTIONS:
+            tool = tools_by_action.get(step.action)
+            if (tool and tool.side_effects) or step.action in SIDE_EFFECTING_ACTIONS:
                 warnings.append(
                     WorkflowValidationIssue(
                         message=f"Step uses side-effecting tool: {step.action}.",

@@ -1,4 +1,4 @@
-"""Subprocess + sandbox helpers for running generated workflow scripts.
+"""Subprocess helpers for running generated workflow scripts.
 
 This module owns:
   - POSIX rlimits applied to workflow subprocesses (CPU / RSS / file size).
@@ -7,8 +7,7 @@ This module owns:
   - Validating workflow paths stay inside ``data/generated_workflows``.
   - Server-Sent Event encoding helpers used by the streaming endpoint.
 
-The Flask routes in ``main.py`` should be thin wrappers around these
-functions so the runtime concerns are isolated and unit-testable.
+Flask blueprints wrap these functions so runtime concerns stay unit-testable.
 """
 
 from __future__ import annotations
@@ -17,7 +16,7 @@ import json
 import os
 import shutil
 import sys
-from collections.abc import Iterable
+from collections.abc import Iterator
 from typing import Any, Callable, Dict, Optional
 
 from flask import Response, stream_with_context
@@ -161,7 +160,7 @@ def encode_sse(event: str, data: Dict[str, Any]) -> bytes:
 
 def sse_error_response(message: str) -> Response:
     """Wrap a single SSE ``error`` event in a streaming Flask Response."""
-    def gen() -> Iterable[bytes]:
+    def gen() -> Iterator[bytes]:
         yield encode_sse("error", {"message": message})
 
     return Response(stream_with_context(gen()), mimetype="text/event-stream")

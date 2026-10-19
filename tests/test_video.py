@@ -55,7 +55,7 @@ def test_resolve_gemini_model_prefers_explicit_value(
 
 def test_parse_video_requires_file(client) -> None:
     response = client.post("/api/parse-video", data={})
-    assert response.status_code == 200
+    assert response.status_code == 400
     payload = response.get_json()
     assert payload["success"] is False
     assert "no video" in payload["error"].lower()
@@ -73,6 +73,7 @@ def test_parse_video_requires_gemini_api_key(
         "/api/parse-video", data=data, content_type="multipart/form-data"
     )
     payload = response.get_json()
+    assert response.status_code == 400
     assert payload["success"] is False
     assert "GEMINI_API_KEY" in payload["error"]
 
@@ -85,6 +86,7 @@ def test_parse_video_rejects_non_video_mime(client) -> None:
         "/api/parse-video", data=data, content_type="multipart/form-data"
     )
     payload = response.get_json()
+    assert response.status_code == 400
     assert payload["success"] is False
     assert "Unsupported file type" in payload["error"]
 

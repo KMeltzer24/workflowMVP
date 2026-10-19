@@ -8,16 +8,17 @@ from datetime import UTC, datetime
 from typing import Any, Dict
 from zoneinfo import ZoneInfo
 
-from ._base import Tool
+from ._base import _WAIT_MAX_SECONDS, P, Tool, _BaseToolRegistry
 
 
-class SystemToolsMixin:
+class SystemToolsMixin(_BaseToolRegistry):
     def _register_system_tools(self) -> None:
         self.register_tool(Tool(
             name="wait",
             description="Wait for a specified amount of time",
             function=self._wait,
-            parameters={"seconds": "Number of seconds to wait"},
+            category="time",
+            parameters={"seconds": P("Number of seconds to wait", required=True)},
         ))
         self.register_tool(Tool(
             name="get_current_time",
@@ -26,8 +27,9 @@ class SystemToolsMixin:
                 "as ISO 8601 string and Unix timestamp. Use UTC if unsure."
             ),
             function=self._get_current_time,
+            category="time",
             parameters={
-                "timezone": "IANA zone name (default: UTC), e.g. America/Los_Angeles",
+                "timezone": P("IANA zone name (default: UTC), e.g. America/Los_Angeles"),
             },
         ))
 
@@ -43,16 +45,27 @@ class SystemToolsMixin:
                     "cwd but have full user privileges — not a security boundary."
                 ),
                 function=self._run_command,
+                category="system",
+                side_effects=("shell",),
+                safety_level="full",
                 parameters={
-                    "command": "Command to execute",
-                    "timeout": "Timeout in seconds (default: 30)",
+                    "command": P("Command to execute", required=True),
+                    "timeout": P("Timeout in seconds (default: 30)"),
                 },
             ))
 
     def _wait(self, seconds: int) -> Dict[str, Any]:
         try:
-            time.sleep(seconds)
-            return {"success": True, "waited": seconds}
+            secs = float(seconds)
+            if secs < 0:
+                return {"success": False, "error": "seconds must be non-negative"}
+            if secs > _WAIT_MAX_SECONDS:
+                return {
+                    "success": False,
+                    "error": f"wait is capped at {_WAIT_MAX_SECONDS} seconds",
+                }
+            time.sleep(secs)
+            return {"success": True, "waited": secs}
         except Exception as e:
             return {"success": False, "error": str(e)}
 

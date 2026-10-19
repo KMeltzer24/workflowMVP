@@ -5,41 +5,44 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, Optional
 
-from ._base import Tool
+from ._base import P, Tool, _BaseToolRegistry
 
 
-class TextToolsMixin:
+class TextToolsMixin(_BaseToolRegistry):
     def _register_text_tools(self) -> None:
         self.register_tool(Tool(
             name="extract_regex",
             description="Extract regex matches from text.",
             function=self._extract_regex,
+            category="text",
             parameters={
-                "text": "Input text to search",
-                "pattern": "Regular expression pattern",
-                "group": "Optional capture group index or name",
-                "flags": "Optional regex flags string using i, m, s, x",
+                "text": P("Input text to search", required=True),
+                "pattern": P("Regular expression pattern", required=True),
+                "group": P("Optional capture group index or name"),
+                "flags": P("Optional regex flags string using i, m, s, x"),
             },
         ))
         self.register_tool(Tool(
             name="replace_text",
             description="Replace occurrences of text with another string.",
             function=self._replace_text,
+            category="text",
             parameters={
-                "text": "Input text",
-                "old": "Substring to replace",
-                "new": "Replacement string",
-                "count": "Maximum replacements (default: -1 for all)",
+                "text": P("Input text", required=True),
+                "old": P("Substring to replace", required=True),
+                "new": P("Replacement string", required=True),
+                "count": P("Maximum replacements (default: -1 for all)"),
             },
         ))
         self.register_tool(Tool(
             name="split_text",
             description="Split text by delimiter, whitespace, or lines.",
             function=self._split_text,
+            category="text",
             parameters={
-                "text": "Input text",
-                "delimiter": "Optional delimiter. Uses whitespace when omitted.",
-                "lines": "If true, split into lines instead of using delimiter",
+                "text": P("Input text", required=True),
+                "delimiter": P("Optional delimiter. Uses whitespace when omitted."),
+                "lines": P("If true, split into lines instead of using delimiter"),
             },
         ))
 

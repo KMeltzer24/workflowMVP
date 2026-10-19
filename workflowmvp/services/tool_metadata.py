@@ -83,4 +83,9 @@ CATEGORY_LABELS: Dict[str, str] = {
 
 def tool_category(tool_name: str) -> str:
     """Return the registry category for a tool name."""
+    from workflowmvp.tools import ToolRegistry
+
+    tool = ToolRegistry().get_tool(tool_name)
+    if tool is not None and tool.category and tool.category != "general":
+        return tool.category
     return TOOL_CATEGORIES.get(tool_name, "system")

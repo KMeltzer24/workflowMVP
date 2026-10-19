@@ -6,10 +6,10 @@ import re
 import sqlite3
 from typing import Any, Dict, List, Optional
 
-from ._base import Tool
+from ._base import P, Tool, _BaseToolRegistry
 
 
-class DatabaseToolsMixin:
+class DatabaseToolsMixin(_BaseToolRegistry):
     _SQL_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
     def _register_database_tools(self) -> None:
@@ -17,20 +17,23 @@ class DatabaseToolsMixin:
             name="sqlite_query",
             description="Execute SQL query on SQLite database",
             function=self._sqlite_query,
+            category="database",
             parameters={
-                "database_path": "Path to SQLite database file",
-                "query": "SQL query to execute",
-                "params": "Optional query parameters (list or dict)",
+                "database_path": P("Path to SQLite database file", required=True),
+                "query": P("SQL query to execute"),
+                "params": P("Optional query parameters (list or dict)"),
             },
         ))
         self.register_tool(Tool(
             name="sqlite_insert",
             description="Insert data into SQLite database",
             function=self._sqlite_insert,
+            category="database",
+            side_effects=("write",),
             parameters={
-                "database_path": "Path to SQLite database file",
-                "table": "Table name",
-                "data": "Data to insert (dict or list of dicts)",
+                "database_path": P("Path to SQLite database file", required=True),
+                "table": P("Table name", required=True),
+                "data": P("Data to insert (dict or list of dicts)"),
             },
         ))
 
@@ -42,11 +45,17 @@ class DatabaseToolsMixin:
     ) -> Dict[str, Any]:
         try:
             normalized_query = query.strip()
-            allowed_query_prefixes = ("SELECT", "PRAGMA")
-            if not normalized_query.upper().startswith(allowed_query_prefixes):
+            if normalized_query.endswith(";"):
+                normalized_query = normalized_query[:-1].strip()
+            if ";" in normalized_query:
                 return {
                     "success": False,
-                    "error": "sqlite_query only allows SELECT or PRAGMA statements. Use sqlite_insert for writes.",
+                    "error": "sqlite_query allows a single SELECT statement only.",
+                }
+            if not normalized_query.upper().startswith("SELECT"):
+                return {
+                    "success": False,
+                    "error": "sqlite_query only allows SELECT statements. Use sqlite_insert for writes.",
                 }
             safe_db = self._sandbox_path(database_path)
             conn = sqlite3.connect(safe_db)

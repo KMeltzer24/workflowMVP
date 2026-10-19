@@ -25,4 +25,6 @@ import main  # noqa: E402  # import after sys.path so `main` resolves
 def client():
     main.app.config["TESTING"] = True
     with main.app.test_client() as test_client:
+        # Browser POSTs always send Origin; require it in production, so tests do too.
+        test_client.environ_base["HTTP_ORIGIN"] = "http://localhost"
         yield test_client

@@ -10,7 +10,7 @@ import logging
 import os
 from typing import Any
 
-DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+DEFAULT_GEMINI_MODEL = "gemini-3.5-flash-lite"
 
 
 def gemini_response_to_text(response: Any) -> str:

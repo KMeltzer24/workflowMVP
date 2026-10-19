@@ -9,110 +9,129 @@ import os
 import shutil
 from typing import Any, Dict, List, Optional
 
-from ._base import Tool
+from ._base import P, Tool, _BaseToolRegistry
 
 
-class FilesystemToolsMixin:
+class FilesystemToolsMixin(_BaseToolRegistry):
     """File and directory operations (no network, no LLMs, no email)."""
 
     # ----- registration ---------------------------------------------------
 
     def _register_filesystem_tools(self) -> None:
+        fs = "filesystem"
         self.register_tool(Tool(
             name="read_file",
             description="Read content from a file",
             function=self._read_file,
+            category=fs,
             parameters={
-                "file_path": "Path to the file to read",
-                "encoding": "File encoding (default: utf-8)",
+                "file_path": P("Path to the file to read", required=True),
+                "encoding": P("File encoding (default: utf-8)"),
             },
         ))
         self.register_tool(Tool(
             name="write_file",
             description="Write content to a file",
             function=self._write_file,
+            category=fs,
+            side_effects=("write",),
             parameters={
-                "file_path": "Path to the file to write",
-                "content": "Content to write",
-                "encoding": "File encoding (default: utf-8)",
+                "file_path": P("Path to the file to write", required=True),
+                "content": P("Content to write"),
+                "encoding": P("File encoding (default: utf-8)"),
             },
         ))
         self.register_tool(Tool(
             name="list_files",
             description="List files in a directory",
             function=self._list_files,
+            category=fs,
             parameters={
-                "directory": "Directory path to list",
-                "pattern": "Optional file pattern filter",
+                "directory": P("Directory path to list", required=True),
+                "pattern": P("Optional file pattern filter"),
             },
         ))
         self.register_tool(Tool(
             name="create_directory",
             description="Create a directory",
             function=self._create_directory,
-            parameters={"directory": "Directory path to create"},
+            category=fs,
+            side_effects=("write",),
+            parameters={"directory": P("Directory path to create", required=True)},
         ))
         self.register_tool(Tool(
             name="copy_file",
             description="Copy file from source to destination",
             function=self._copy_file,
+            category=fs,
+            side_effects=("write",),
             parameters={
-                "source": "Source file path",
-                "destination": "Destination file path",
+                "source": P("Source file path", required=True),
+                "destination": P("Destination file path", required=True),
             },
         ))
         self.register_tool(Tool(
             name="move_file",
             description="Move file from source to destination",
             function=self._move_file,
+            category=fs,
+            side_effects=("write",),
             parameters={
-                "source": "Source file path",
-                "destination": "Destination file path",
+                "source": P("Source file path", required=True),
+                "destination": P("Destination file path", required=True),
             },
         ))
         self.register_tool(Tool(
             name="delete_file",
             description="Delete a file",
             function=self._delete_file,
-            parameters={"file_path": "Path to file to delete"},
+            category=fs,
+            side_effects=("write",),
+            parameters={"file_path": P("Path to file to delete", required=True)},
         ))
         self.register_tool(Tool(
             name="read_csv",
             description="Read and parse CSV file",
             function=self._read_csv,
+            category=fs,
             parameters={
-                "file_path": "Path to CSV file",
-                "delimiter": "CSV delimiter (default: comma)",
-                "encoding": "File encoding (default: utf-8)",
+                "file_path": P("Path to CSV file", required=True),
+                "delimiter": P("CSV delimiter (default: comma)"),
+                "encoding": P("File encoding (default: utf-8)"),
             },
         ))
         self.register_tool(Tool(
             name="write_csv",
             description="Write data to CSV file",
             function=self._write_csv,
+            category=fs,
+            side_effects=("write",),
             parameters={
-                "file_path": "Path to CSV file",
-                "data": "Data to write (list of dicts)",
-                "fieldnames": "Column names (optional)",
+                "file_path": P("Path to CSV file", required=True),
+                "data": P("Data to write (list of dicts)"),
+                "fieldnames": P("Column names (optional)"),
             },
         ))
         self.register_tool(Tool(
             name="read_xlsx",
             description="Read rows from an Excel .xlsx worksheet into a list of dictionaries.",
             function=self._read_xlsx,
+            category=fs,
             parameters={
-                "file_path": "Path to the .xlsx file",
-                "sheet": "Worksheet name to read (optional; defaults to active sheet)",
+                "file_path": P("Path to the .xlsx file", required=True),
+                "sheet": P("Worksheet name to read (optional; defaults to active sheet)"),
             },
         ))
         self.register_tool(Tool(
             name="write_xlsx",
             description="Write a list of dictionaries to an Excel .xlsx worksheet.",
             function=self._write_xlsx,
+            category=fs,
+            side_effects=("write",),
             parameters={
-                "file_path": "Path to the output .xlsx file",
-                "data": "Data to write (list of dicts)",
-                "sheet": "Worksheet name (default: Sheet1)",
+                "file_path": P("Path to the output .xlsx file", required=True),
+                "data": P("Data to write (list of dicts)"),
+                "sheet": P("Worksheet name (default: Sheet1)"),
             },
         ))
         self.register_tool(Tool(
@@ -122,39 +141,48 @@ class FilesystemToolsMixin:
                 "(returned as JSON text and structured data)."
             ),
             function=self._read_json,
+            category=fs,
             parameters={
-                "file_path": "Path to the .json file",
-                "encoding": "File encoding (default: utf-8)",
+                "file_path": P("Path to the .json file", required=True),
+                "encoding": P("File encoding (default: utf-8)"),
             },
         ))
         self.register_tool(Tool(
             name="write_json",
             description="Write a dict or list to a JSON file (pretty-printed by default).",
             function=self._write_json,
+            category=fs,
+            side_effects=("write",),
             parameters={
-                "file_path": "Path to the output .json file",
-                "data": "Dict or list to serialize (may be passed from json.loads or Python literals)",
-                "indent": "Indent level for pretty-printing (default: 2; use None for compact)",
-                "encoding": "File encoding (default: utf-8)",
+                "file_path": P("Path to the output .json file", required=True),
+                "data": P(
+                    "Dict or list to serialize (may be passed from json.loads or Python literals)",
+                    required=True,
+                ),
+                "indent": P("Indent level for pretty-printing (default: 2; use None for compact)"),
+                "encoding": P("File encoding (default: utf-8)"),
             },
         ))
         self.register_tool(Tool(
             name="append_file",
             description="Append text to the end of a file (creates the file if it does not exist).",
             function=self._append_file,
+            category=fs,
+            side_effects=("write",),
             parameters={
-                "file_path": "Path to the file",
-                "content": "Text to append",
-                "encoding": "File encoding (default: utf-8)",
+                "file_path": P("Path to the file", required=True),
+                "content": P("Text to append", required=True),
+                "encoding": P("File encoding (default: utf-8)"),
             },
         ))
         self.register_tool(Tool(
             name="hash_file",
             description="Compute a cryptographic hash of file contents (default SHA-256, hex-encoded).",
             function=self._hash_file,
+            category=fs,
             parameters={
-                "file_path": "Path to the file",
-                "algorithm": "Hash name, e.g. sha256, sha1, md5 (default: sha256)",
+                "file_path": P("Path to the file", required=True),
+                "algorithm": P("Hash name, e.g. sha256, sha1, md5 (default: sha256)"),
             },
         ))
         self.register_tool(Tool(
@@ -164,9 +192,10 @@ class FilesystemToolsMixin:
                 "Returns the concatenated text of all pages (or a selected page range)."
             ),
             function=self._read_pdf,
+            category=fs,
             parameters={
-                "file_path": "Path to the .pdf file",
-                "pages": (
+                "file_path": P("Path to the .pdf file", required=True),
+                "pages": P(
                     "Optional list of 1-indexed page numbers, or a string "
                     "like '1-3' / '2,4,6'. Reads all pages when omitted."
                 ),

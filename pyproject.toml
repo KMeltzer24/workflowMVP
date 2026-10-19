@@ -9,7 +9,7 @@ description = "Turn screen recordings or prose into executable Python workflows 
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
-authors = [{ name = "Kevin Meltzer", email = "kevinmeltzer1@gmail.com" }]
+authors = [{ name = "Kevin Meltzer", email = "KMeltzer24@users.noreply.github.com" }]
 keywords = ["workflow", "automation", "gemini", "ai", "flask"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -24,8 +24,9 @@ dependencies = [
     "google-genai>=1.0.0",
     "requests>=2.28.0",
     "python-dotenv>=1.0.0",
-    "opencv-python>=4.9.0.80",
+    "opencv-python-headless>=4.9.0.80",
     "flask>=2.3.0",
+    "jinja2>=3.1.0",
     "yfinance>=0.2.0",
     "beautifulsoup4>=4.12.0",
     "pypdf>=5.0.0",
@@ -38,6 +39,7 @@ dev = [
     "pytest>=7.4",
     "pytest-cov>=4.1",
     "ruff>=0.4",
+    "mypy>=1.10",
 ]
 
 [project.urls]
@@ -88,7 +90,13 @@ ignore = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+addopts = "-q --cov=workflowmvp --cov-fail-under=80"
 filterwarnings = [
     "ignore::DeprecationWarning",
 ]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+files = ["workflowmvp"]
+warn_unused_ignores = false

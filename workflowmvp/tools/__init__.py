@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import requests  # re-exported for monkey-patching in tests
 
-from ._base import Tool, _BaseToolRegistry
+from ._base import P, Tool, parameter_descriptions
 from .ai import AIToolsMixin
 from .archive import ArchiveToolsMixin
 from .database import DatabaseToolsMixin
@@ -36,7 +36,6 @@ class ToolRegistry(
     DatabaseToolsMixin,
     ArchiveToolsMixin,
     TextToolsMixin,
-    _BaseToolRegistry,
 ):
     """Concrete registry composed from per-category mixins.
 
@@ -56,4 +55,4 @@ class ToolRegistry(
         self._register_text_tools()
 
 
-__all__ = ["Tool", "ToolRegistry", "requests"]
+__all__ = ["P", "Tool", "ToolRegistry", "parameter_descriptions", "requests"]

@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
+from io import BytesIO
 from unittest.mock import patch
 
 import pytest
 
 from workflowmvp.agent import WorkflowAgent
 from workflowmvp.parser import WorkflowStep
+
+
+def test_index_page_renders(client) -> None:
+    response = client.get("/")
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert "WorkflowMVP" in html
+    assert "js/core.js" in html
+    assert "js/create-tab.js" in html
 
 
 def test_tools_endpoint(client) -> None:
@@ -66,6 +76,25 @@ def test_tools_endpoint_includes_category(client) -> None:
     for tool in payload:
         assert {"name", "description", "parameters", "category"}.issubset(tool)
         assert tool["category"]
+
+
+def test_tools_endpoint_internal_error_is_json_500(client) -> None:
+    with patch("workflowmvp.blueprints.meta.ToolRegistry", side_effect=RuntimeError("boom")):
+        response = client.get("/api/tools")
+    assert response.status_code == 500
+    payload = response.get_json()
+    assert payload["success"] is False
+    assert payload["error"] == "Internal server error"
+
+
+def test_examples_endpoint_internal_error_is_json_500(client) -> None:
+    with patch(
+        "workflowmvp.blueprints.meta.list_examples",
+        side_effect=RuntimeError("boom"),
+    ):
+        response = client.get("/api/examples")
+    assert response.status_code == 500
+    assert response.get_json()["error"] == "Internal server error"
 
 
 def test_examples_endpoint_exposes_requirements(client) -> None:
@@ -145,6 +174,48 @@ def test_parse_workflow_reports_skipped_ai_repair_without_key(
         "attempted": False,
         "error": "Missing GEMINI_API_KEY; AI cleanup was skipped.",
     }
+
+
+def test_parse_single_step_requires_description(client) -> None:
+    response = client.post("/api/parse-single-step", json={"description": "   "})
+    assert response.status_code == 400
+    assert response.get_json()["success"] is False
+
+
+def test_parse_video_requires_file(client) -> None:
+    response = client.post("/api/parse-video")
+    assert response.status_code == 400
+    assert "video" in response.get_json()["error"].lower()
+
+
+def test_parse_video_rejects_non_video_mime(client) -> None:
+    response = client.post(
+        "/api/parse-video",
+        data={"video": (BytesIO(b"not-a-video"), "notes.txt")},
+        content_type="multipart/form-data",
+        headers={"Content-Type": "multipart/form-data"},
+    )
+    # Flask infers mimetype from filename; text files should be rejected or fail later.
+    assert response.status_code in {400, 415}
+
+
+def test_parse_video_requires_gemini_key(
+    client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    response = client.post(
+        "/api/parse-video",
+        data={
+            "video": (BytesIO(b"\x00\x00"), "clip.mp4"),
+            "credentials": "{}",
+        },
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert "GEMINI_API_KEY" in payload["error"] or "GEMINI_API_KEY" in str(
+        payload.get("missing_requirements")
+    )
 
 
 def test_parse_single_step_endpoint(client) -> None:
@@ -291,6 +362,7 @@ def test_run_workflow_rejects_path_outside_generated_dir(client, tmp_path) -> No
         json={"workflow_path": str(bogus)},
     )
     payload = response.get_json()
+    assert response.status_code == 404
     assert payload["success"] is False
     assert "not found" in payload["error"].lower()
 
@@ -301,6 +373,7 @@ def test_run_workflow_missing_file_returns_error(client) -> None:
         json={"workflow_path": "data/generated_workflows/does_not_exist.py"},
     )
     payload = response.get_json()
+    assert response.status_code == 404
     assert payload["success"] is False
 
 

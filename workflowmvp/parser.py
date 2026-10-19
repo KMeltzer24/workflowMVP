@@ -27,34 +27,11 @@ class WorkflowStep:
 class WorkflowParser:
     """Parse numbered or bulleted prose into rough structured steps."""
 
-    REQUIRED_ACTION_PARAMS: Dict[str, List[str]] = {
-        "download": ["url"],
-        "read_file": ["file_path"],
-        "read_json": ["file_path"],
-        "write_file": ["file_path"],
-        "write_json": ["file_path", "data"],
-        "append_file": ["file_path", "content"],
-        "hash_file": ["file_path"],
-        "read_csv": ["file_path"],
-        "write_csv": ["file_path"],
-        "send_email": ["recipient"],
-        "copy_file": ["source", "destination"],
-        "move_file": ["source", "destination"],
-        "delete_file": ["file_path"],
-        "run_command": ["command"],
-        "create_directory": ["directory"],
-        "list_files": ["directory"],
-        "sqlite_query": ["database_path"],
-        "sqlite_insert": ["database_path", "table"],
-        "compress_files": ["archive_path"],
-        "extract_archive": ["archive_path", "extract_to"],
-        "fetch_stock_price": ["ticker"],
-        "generate_text": ["prompt"],
-        "http_request": ["url"],
-        "read_pdf": ["file_path"],
-        "render_template": ["template"],
-        "discover_urls": ["start_url"],
-    }
+    @classmethod
+    def required_action_params_map(cls) -> Dict[str, List[str]]:
+        from workflowmvp.tools import ToolRegistry
+
+        return ToolRegistry().required_params_map()
 
     def parse_workflow(self, workflow_text: str) -> List[WorkflowStep]:
         """Parse workflow text into ordered workflow steps."""
@@ -128,7 +105,7 @@ class WorkflowParser:
         missing_details: List[str] = []
 
         for step in steps:
-            required = self.REQUIRED_ACTION_PARAMS.get(step.action, [])
+            required = self.required_action_params_map().get(step.action, [])
             missing = [key for key in required if not str(step.parameters.get(key, "")).strip()]
             if missing:
                 missing_param_steps += 1
@@ -183,6 +160,9 @@ class WorkflowParser:
         line = re.sub(r'^Step\s+\d+:\s*', '', line)
         line = re.sub(r'^[-*]\s*', '', line)
         return line.strip()
+
+    def extract_action_and_params(self, description: str) -> tuple[str, Dict[str, Any]]:
+        return self._extract_action_and_params(description)
 
     def _extract_action_and_params(self, description: str) -> tuple[str, Dict[str, Any]]:
         """Map a step description to an action + parameters.
@@ -432,7 +412,7 @@ class WorkflowParser:
         files_match = re.findall(r'["\']([^"\']*\.[\w]+)["\']', description)
         archive_match = re.search(r'to\s+["\']?([^"\']+)["\']?', description)
 
-        params = {'description': description}
+        params: Dict[str, Any] = {'description': description}
         if files_match:
             params['files'] = files_match
         if archive_match:

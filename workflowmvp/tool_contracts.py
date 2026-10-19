@@ -9,11 +9,11 @@ before generated code is written.
 from __future__ import annotations
 
 import ast
-import re
 from dataclasses import dataclass
 from typing import Callable, Iterable, Optional
 
 Validator = Callable[[str], Optional[str]]
+_SEARCH_HOMEPAGE_MARKERS = ("google.com", "bing.com", "duckduckgo.com")
 
 
 @dataclass(frozen=True)
@@ -25,21 +25,94 @@ class ToolContract:
     always_include: bool = False
 
 
-def _uses_tool(code: str, tool_name: str) -> bool:
-    return bool(re.search(rf"get_tool\(\s*['\"]{re.escape(tool_name)}['\"]\s*\)", code))
+def _parse_module(code: str) -> ast.AST | None:
+    try:
+        return ast.parse(code)
+    except SyntaxError:
+        return None
+
+
+def _uses_tool(tree: ast.AST, tool_name: str) -> bool:
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not isinstance(func, ast.Attribute) or func.attr != "get_tool":
+            continue
+        if not node.args:
+            continue
+        arg0 = node.args[0]
+        if isinstance(arg0, ast.Constant) and arg0.value == tool_name:
+            return True
+    return False
+
+
+def _is_get_key(call: ast.AST, key: str) -> bool:
+    if not isinstance(call, ast.Call):
+        return False
+    if not isinstance(call.func, ast.Attribute) or call.func.attr != "get":
+        return False
+    if not call.args:
+        return False
+    arg0 = call.args[0]
+    return isinstance(arg0, ast.Constant) and arg0.value == key
+
+
+def _expr_contains_get_result(node: ast.AST) -> bool:
+    if _is_get_key(node, "result"):
+        return True
+    for child in ast.iter_child_nodes(node):
+        if _expr_contains_get_result(child):
+            return True
+    return False
+
+
+def _is_json_loads_call(call: ast.Call) -> bool:
+    func = call.func
+    if isinstance(func, ast.Attribute) and func.attr == "loads":
+        return isinstance(func.value, ast.Name) and func.value.id == "json"
+    return isinstance(func, ast.Name) and func.id == "loads"
+
+
+def _has_isinstance_guard(tree: ast.AST) -> bool:
+    return any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "isinstance"
+        for node in ast.walk(tree)
+    )
+
+
+def _get_result_default_empty_list(call: ast.Call) -> bool:
+    if not _is_get_key(call, "result"):
+        return False
+    if len(call.args) >= 2 and isinstance(call.args[1], ast.List) and not call.args[1].elts:
+        return True
+    return False
+
+
+def _name_looks_like_discover(node: ast.AST) -> bool:
+    return isinstance(node, ast.Name) and "discover" in node.id.lower()
+
+
+def _kwarg_str(call: ast.Call, name: str) -> Optional[str]:
+    for kw in call.keywords:
+        if kw.arg == name and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+            return kw.value.value
+    return None
 
 
 def _validate_http_request(code: str) -> Optional[str]:
-    if not _uses_tool(code, "http_request"):
+    tree = _parse_module(code)
+    if tree is None or not _uses_tool(tree, "http_request"):
         return None
-    unsafe_json_loads = bool(
-        re.search(
-            r"json\.loads\(\s*[A-Za-z_]\w*\.get\(\s*['\"]result['\"]",
-            code,
-        )
-    )
-    has_type_guard = "isinstance(" in code and "dict" in code
-    if unsafe_json_loads and not has_type_guard:
+    unsafe_json_loads = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and _is_json_loads_call(node) and node.args:
+            if _expr_contains_get_result(node.args[0]):
+                unsafe_json_loads = True
+                break
+    if unsafe_json_loads and not _has_isinstance_guard(tree):
         return (
             "Invalid http_request result handling: `result` may be dict/list. "
             "Add a type guard before json.loads."
@@ -48,68 +121,73 @@ def _validate_http_request(code: str) -> Optional[str]:
 
 
 def _validate_discover_urls(code: str) -> Optional[str]:
-    if not _uses_tool(code, "discover_urls"):
+    tree = _parse_module(code)
+    if tree is None or not _uses_tool(tree, "discover_urls"):
         return None
-    bad_result_iteration = bool(
-        re.search(
-            r"\w+\s*=\s*\w+\.get\(\s*['\"]result['\"]\s*,\s*\[\s*\]\s*\)",
-            code,
-        )
-    )
-    if bad_result_iteration:
-        return (
-            "Invalid discover_urls result handling: iterate over `response['urls']` "
-            "(entries with `url`), not `response['result']`."
-        )
-    # ``result`` on discover_urls is a JSON *string* for logging — not a URL list. Using
-    # ``.get('result', [])`` then extend/for/len is a common bug (iterates characters).
-    if bool(
-        re.search(
-            r"(?i)\b(?:discover_result|discover_response|discover_out|"
-            r"discovery_result|discovery_response)\.get\(\s*['\"]result['\"]",
-            code,
-        )
-    ):
-        return (
-            "Invalid discover_urls handling: `response['result']` is a debug JSON string, "
-            "not URL strings. Use `response.get('urls') or []` (each entry has `url` and "
-            "`score`) or `response.get('urls_only') or []`."
-        )
-    if re.search(
-        r"start_url\s*=\s*['\"]https?://(?:www\.)?(?:google|bing|duckduckgo)\.",
-        code,
-        re.I,
-    ):
-        return (
-            "Invalid discover_urls `start_url`: do not use general search homepages (google.com, bing.com, …). "
-            "Use a real publisher, plans site, or retailer from the step text, or an explicit article URL."
-        )
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and _get_result_default_empty_list(node):
+            return (
+                "Invalid discover_urls result handling: iterate over `response['urls']` "
+                "(entries with `url`), not `response['result']`."
+            )
+        if (
+            isinstance(node, ast.Call)
+            and _is_get_key(node, "result")
+            and isinstance(node.func, ast.Attribute)
+            and _name_looks_like_discover(node.func.value)
+        ):
+            return (
+                "Invalid discover_urls handling: `response['result']` is a debug JSON string, "
+                "not URL strings. Use `response.get('urls') or []` (each entry has `url` and "
+                "`score`) or `response.get('urls_only') or []`."
+            )
+        if isinstance(node, ast.Call):
+            start_url = _kwarg_str(node, "start_url")
+            if start_url and any(marker in start_url.lower() for marker in _SEARCH_HOMEPAGE_MARKERS):
+                return (
+                    "Invalid discover_urls `start_url`: do not use general search homepages "
+                    "(google.com, bing.com, …). "
+                    "Use a real publisher, plans site, or retailer from the step text, or an explicit article URL."
+                )
     return None
 
 
 def _validate_scrape_webpage(code: str) -> Optional[str]:
-    # scrape_webpage returns text content, not a structured dict of materials.
-    # Catch a frequent bad pattern: assigning scraped `result` to `materials`
-    # then calling `materials.items()`.
-    scrape_to_materials = bool(
-        re.search(
-            r"materials\s*=\s*[A-Za-z_]\w*\.get\(\s*['\"]result['\"]\s*\)",
-            code,
-        )
-    )
-    iter_materials_items = bool(
-        re.search(r"for\s+\w+\s*,\s*\w+\s+in\s+materials\.items\(\)", code)
-    )
-    if scrape_to_materials and iter_materials_items:
+    tree = _parse_module(code)
+    if tree is None:
+        return None
+    materials_from_result = False
+    iter_materials_items = False
+    materials_extend_result = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            if any(isinstance(t, ast.Name) and t.id == "materials" for t in node.targets):
+                if _is_get_key(node.value, "result"):
+                    materials_from_result = True
+        if isinstance(node, ast.For) and isinstance(node.iter, ast.Call):
+            func = node.iter.func
+            if (
+                isinstance(func, ast.Attribute)
+                and func.attr == "items"
+                and isinstance(func.value, ast.Name)
+                and func.value.id == "materials"
+            ):
+                iter_materials_items = True
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            if (
+                node.func.attr == "extend"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "materials"
+                and node.args
+                and _expr_contains_get_result(node.args[0])
+            ):
+                materials_extend_result = True
+    if materials_from_result and iter_materials_items:
         return (
             "Invalid scrape_webpage handling: scraped `result` is text. "
             "Do not call `materials.items()` without first parsing/structuring it."
         )
-    # ``list.extend(str)`` iterates characters — common bug after scrape_webpage.
-    if _uses_tool(code, "scrape_webpage") and re.search(
-        r"(?i)materials\.extend\(\s*[^)]*\.get\(\s*['\"]result['\"]",
-        code,
-    ):
+    if _uses_tool(tree, "scrape_webpage") and materials_extend_result:
         return (
             "Invalid scrape_webpage handling: do not `materials.extend(resp.get('result'))` — "
             "scraped `result` is plain text; extend would iterate characters. "
@@ -120,15 +198,32 @@ def _validate_scrape_webpage(code: str) -> Optional[str]:
     return None
 
 
+def _imports_json_llm_helper(tree: ast.AST) -> bool:
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and (node.module or "").endswith("json_llm"):
+            return True
+        if isinstance(node, ast.Name) and node.id == "extract_first_json_value":
+            return True
+        if isinstance(node, ast.Attribute) and node.attr == "extract_first_json_value":
+            return True
+    return False
+
+
 def _validate_generate_text_json_via_helper_when_web(code: str) -> Optional[str]:
     """LLM outputs need strip/fence tolerant parsing — not naive ``json.loads`` on ``result``."""
-    if not _uses_tool(code, "generate_text"):
+    tree = _parse_module(code)
+    if tree is None:
         return None
-    if not (_uses_tool(code, "scrape_webpage") or _uses_tool(code, "discover_urls")):
+    if not _uses_tool(tree, "generate_text"):
         return None
-    if not re.search(r"\bjson\.loads\s*\(", code):
+    if not (_uses_tool(tree, "scrape_webpage") or _uses_tool(tree, "discover_urls")):
         return None
-    if "extract_first_json_value" in code or "workflowmvp.json_llm" in code.replace(" ", ""):
+    has_json_loads = any(
+        isinstance(node, ast.Call) and _is_json_loads_call(node) for node in ast.walk(tree)
+    )
+    if not has_json_loads:
+        return None
+    if _imports_json_llm_helper(tree):
         return None
     return (
         "When `generate_text` emits JSON after `scrape_webpage` / `discover_urls`, do not "
@@ -277,178 +372,10 @@ def build_retry_contract_guidance() -> str:
         "- Do not `import requests` or `bs4` — use `http_request` / `scrape_webpage` / `discover_urls`."
     )
     lines.append(
-        "- For report-style `generate_text`, the prompt must include pasted excerpts "
-        "(f-string with retrieved text), not a meta-only \"write a report\" instruction."
-    )
-    lines.append(
-        "- Never substitute illustrative/placeholder research, fake \"sources\", or invented "
-        "price tables for web research steps — use `discover_urls` + `scrape_webpage` "
-        "(or `http_request`) and fail fast if retrieval fails."
-    )
-    lines.append(
         "- If `generate_text` must return JSON lists/objects, parse via "
         "`workflowmvp.json_llm.extract_first_json_value` (not bare `json.loads` on prose/fences)."
     )
-    lines.append(
-        "- Do not \"refuse\" web-research steps by writing stub JSON / status:failed payloads "
-        "without calling `discover_urls` / `scrape_webpage` — try tools first, then fail fast "
-        "without email if nothing was retrieved."
-    )
-    lines.append(
-        "- For event schedules, accept the date granularity in the source. A date range "
-        "like 'April 17 - 30' is valid even without a showtime; do not require a single "
-        "MM/DD/YYYY + HH:MM timestamp unless the page provides one."
-    )
     return "\n".join(lines)
-
-
-def _validate_no_placeholder_research_copout(code: str) -> Optional[str]:
-    """Reject scripts that skip real retrieval with fake illustrative data or excuses."""
-    lowered = code.lower()
-    high_signal = (
-        "illustrative source",
-        "no actual scraping",
-        "no actual web scraping",
-        "generating placeholder",
-        "not performed due to the absence of specific url",
-        "as actual web scraping was not performed",
-        "not provided for live scraping",
-        "without live scraping",
-        "placeholder indicating missing",
-        "placeholder content indicating",
-        "extraction could not be completed",
-        "without explicit urls or detailed scraping",
-        "detailed parsing instructions were not provided",
-        "advanced parsing capabilities not directly available",
-    )
-    if any(needle in lowered for needle in high_signal):
-        return (
-            "Illustrative/placeholder research is not allowed: do not invent sources, "
-            "materials lists, or retail prices to stand in for `discover_urls` / "
-            "`scrape_webpage` / `http_request`. Retrieve real pages or stop with a clear error."
-        )
-    if "skipping consolidation" in lowered and "placeholder" in lowered:
-        return (
-            "Do not skip consolidation with placeholder research — use real `scrape_webpage` "
-            "output or stop before downstream steps."
-        )
-    if "skipping cost estimation" in lowered and "placeholder" in lowered:
-        return (
-            "Do not skip cost steps citing placeholder research — retrieve real data or exit "
-            "before reports/email."
-        )
-    return None
-
-
-def _validate_research_refusal_without_web_tools(code: str) -> Optional[str]:
-    """Reject scripts that claim research cannot be done but never call web tools."""
-    lowered = code.lower()
-    refusal_hint = (
-        "could not be completed" in lowered
-        or "cannot be performed" in lowered
-        or '"status": "failed"' in lowered
-        or "'status': 'failed'" in lowered
-        or '"status": \'failed\'' in lowered
-    )
-    research_hint = (
-        "research" in lowered
-        and (
-            "_research.json" in lowered
-            or "materials_by_source" in lowered
-            or "structured data extraction" in lowered
-        )
-    )
-    if not (refusal_hint and research_hint):
-        return None
-    tried_web = (
-        "discover_urls" in lowered
-        or "scrape_webpage" in lowered
-        or "get_tool('http_request')" in code
-        or 'get_tool("http_request")' in code
-    )
-    if tried_web:
-        return None
-    return (
-        "Web research steps must call `discover_urls` and/or `scrape_webpage` (or `http_request`) "
-        "before writing a failed/empty research payload. Do not claim URLs are \"unspecified\" "
-        "if the workflow implies web research — attempt discovery + scrape, then fail fast without "
-        "placeholder JSON, reports, or email."
-    )
-
-
-def _validate_no_phony_materials_after_scrape(code: str) -> Optional[str]:
-    """Reject loops that ignore scraped text and append toy material dicts (wood/screws stubs)."""
-    if not _uses_tool(code, "scrape_webpage"):
-        return None
-    if re.search(
-        r"materials\.extend\(\[\s*\{\s*['\"]material['\"]\s*:\s*['\"]|"
-        r"materials\.append\(\{\s*['\"]material['\"]\s*:\s*['\"]",
-        code,
-    ):
-        return (
-            "Do not append hardcoded `{'material': '...'}` dicts while "
-            "ignoring scraped page text. Derive materials from excerpts via `generate_text` or parsing."
-        )
-    return None
-
-
-def _validate_no_example_unit_pricing_in_research_workflow(code: str) -> Optional[str]:
-    """Reject 'example' unit prices in *research.json-style BOM workflows."""
-    lowered = code.lower()
-    if "_research.json" not in lowered:
-        return None
-    if re.search(r"unit_price\s*=\s*[\d.]+\s*#\s*[Ee]xample", code) or re.search(
-        r"#\s*[Ee]xample\s+unit\s+price", code
-    ):
-        return (
-            "Do not use example/placeholder `unit_price` values in research workflows. "
-            "Use prices from scraped text or mark line items as unknown / verify in store."
-        )
-    return None
-
-
-def _validate_no_schedule_failure_email(code: str) -> Optional[str]:
-    """Reject scripts that email a missing-schedule placeholder as if it succeeded."""
-    lowered = code.lower()
-    missing_schedule = (
-        "schedule not found" in lowered
-        or "date and time not found" in lowered
-        or "could not find the schedule" in lowered
-    )
-    sends_email = (
-        "get_tool('send_email')" in code
-        or 'get_tool("send_email")' in code
-        or "send_email_tool.function" in code
-    )
-    if missing_schedule and sends_email:
-        return (
-            "Do not send email with a missing-schedule placeholder. For schedule workflows, "
-            "extract the date/range actually present in scraped text, or fail fast before "
-            "`send_email` if no schedule detail was retrieved."
-        )
-    return None
-
-
-def _validate_no_banned_http_scrape_imports(code: str) -> Optional[str]:
-    """Generated workflows must use ToolRegistry (scrape_webpage, http_request,
-    discover_urls), not ad-hoc ``requests`` / BeautifulSoup — those bypass the
-    intended tool surface and often produce ungrounded reports.
-    """
-    if re.search(r"^\s*import\s+requests\b", code, re.MULTILINE) or re.search(
-        r"^\s*from\s+requests\b", code, re.MULTILINE
-    ):
-        return (
-            "Do not `import requests` in generated workflows. Use "
-            "`tools.get_tool('http_request')` or `tools.get_tool('scrape_webpage')`."
-        )
-    if re.search(r"^\s*import\s+bs4\b", code, re.MULTILINE) or re.search(
-        r"^\s*from\s+bs4\b", code, re.MULTILINE
-    ):
-        return (
-            "Do not `import bs4` / BeautifulSoup in generated workflows. Use "
-            "`tools.get_tool('scrape_webpage')` for HTML → text."
-        )
-    return None
 
 
 def _get_tool_name_from_call(call: ast.Call) -> Optional[str]:
@@ -477,52 +404,6 @@ def _collect_generate_text_locals(tree: ast.AST) -> set[str]:
             if isinstance(target, ast.Name):
                 names.add(target.id)
     return names
-
-
-def _validate_generate_text_report_grounding(code: str) -> Optional[str]:
-    """Reject meta-only ``generate_text`` prompts that ask for a report without
-    pasting source material (common cause of fabricated BOM/prices).
-    """
-    try:
-        tree = ast.parse(code)
-    except SyntaxError:
-        return None
-
-    gen_locals = _collect_generate_text_locals(tree)
-
-    class Visitor(ast.NodeVisitor):
-        def __init__(self, generate_text_vars: set[str]) -> None:
-            self._generate_text_vars = generate_text_vars
-            self.error: Optional[str] = None
-
-        def visit_Call(self, node: ast.Call) -> None:
-            if self.error is not None:
-                return
-            func = node.func
-            if not isinstance(func, ast.Attribute) or func.attr != "function":
-                self.generic_visit(node)
-                return
-            inner = func.value
-            is_generate_text = False
-            if isinstance(inner, ast.Call):
-                is_generate_text = _get_tool_name_from_call(inner) == "generate_text"
-            elif isinstance(inner, ast.Name) and inner.id in self._generate_text_vars:
-                is_generate_text = True
-            if not is_generate_text:
-                self.generic_visit(node)
-                return
-            prompt_kw = next((k for k in node.keywords if k.arg == "prompt"), None)
-            if prompt_kw is None:
-                self.generic_visit(node)
-                return
-            err = _prompt_value_grounding_error(prompt_kw.value)
-            if err:
-                self.error = err
-            self.generic_visit(node)
-
-    visitor = Visitor(gen_locals)
-    visitor.visit(tree)
-    return visitor.error
 
 
 def _prompt_value_grounding_error(node: ast.expr) -> Optional[str]:
@@ -586,34 +467,6 @@ def validate_tool_contracts(code: str) -> None:
         error = contract.validator(code)
         if error:
             raise ValueError(error)
-
-    extra = _validate_no_banned_http_scrape_imports(code)
-    if extra:
-        raise ValueError(extra)
-
-    gt_err = _validate_generate_text_report_grounding(code)
-    if gt_err:
-        raise ValueError(gt_err)
-
-    ph_err = _validate_no_placeholder_research_copout(code)
-    if ph_err:
-        raise ValueError(ph_err)
-
-    rw_err = _validate_research_refusal_without_web_tools(code)
-    if rw_err:
-        raise ValueError(rw_err)
-
-    toy_m = _validate_no_phony_materials_after_scrape(code)
-    if toy_m:
-        raise ValueError(toy_m)
-
-    toy_p = _validate_no_example_unit_pricing_in_research_workflow(code)
-    if toy_p:
-        raise ValueError(toy_p)
-
-    schedule_email = _validate_no_schedule_failure_email(code)
-    if schedule_email:
-        raise ValueError(schedule_email)
 
     json_loads_err = _validate_generate_text_json_via_helper_when_web(code)
     if json_loads_err:

@@ -21,7 +21,7 @@ import time
 import warnings
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 # macOS system Python is commonly linked against LibreSSL, which triggers a
 # noisy urllib3 warning on import. Silence only that exact warning.
@@ -36,8 +36,11 @@ import requests  # noqa: E402
 # blackhole TCP (no RST), connect can burn the full budget per attempt × retries (~90s for
 # ``timeout=30``, ``attempts=3``). Use a short connect phase by default; override via env.
 _HTTP_CONNECT_TIMEOUT = float(os.getenv("WORKFLOW_HTTP_CONNECT_TIMEOUT", "8"))
+_MAX_REDIRECTS = 5
+_WAIT_MAX_SECONDS = 60
 _BLOCKED_HOSTNAMES = {"localhost"}
 _BLOCKED_METADATA_IPS = {"169.254.169.254"}
+_REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 
 TimeoutLike = int | float | tuple[float, float]
 
@@ -100,7 +103,7 @@ def _validate_public_http_url(url: str) -> None:
 
     resolved: set[str] = set()
     for family, _type, _proto, _canonname, sockaddr in addr_info:
-        raw_ip = sockaddr[0]
+        raw_ip = str(sockaddr[0])
         if family == socket.AF_INET6:
             raw_ip = raw_ip.split("%", 1)[0]
         try:
@@ -115,6 +118,32 @@ def _validate_public_http_url(url: str) -> None:
         raise ValueError(f"Could not resolve URL host to an IP address: {hostname}")
 
 
+def P(description: str, *, required: bool = False) -> Dict[str, Any]:
+    """Structured tool parameter metadata."""
+    return {"description": description, "required": required}
+
+
+def parameter_descriptions(parameters: Dict[str, Any]) -> Dict[str, str]:
+    """Flatten parameter metadata to name → description for prompts and the UI."""
+    out: Dict[str, str] = {}
+    for name, meta in parameters.items():
+        if isinstance(meta, dict):
+            out[name] = str(meta.get("description") or "")
+        else:
+            out[name] = str(meta)
+    return out
+
+
+def required_parameter_names(parameters: Dict[str, Any]) -> List[str]:
+    names: List[str] = []
+    for name, meta in parameters.items():
+        if isinstance(meta, dict) and meta.get("required") is True:
+            names.append(name)
+        elif getattr(meta, "required", False) is True:
+            names.append(name)
+    return names
+
+
 @dataclass
 class Tool:
     """Represents a workflow tool exposed to generated scripts."""
@@ -122,11 +151,17 @@ class Tool:
     name: str
     description: str
     function: Callable
-    parameters: Dict[str, str]
+    parameters: Dict[str, Any]
     category: str = "general"
     side_effects: tuple[str, ...] = ()
     requires_credentials: tuple[str, ...] = ()
     safety_level: str = "safe"
+
+    def param_descriptions(self) -> Dict[str, str]:
+        return parameter_descriptions(self.parameters)
+
+    def required_params(self) -> List[str]:
+        return required_parameter_names(self.parameters)
 
 
 class _BaseToolRegistry:
@@ -155,12 +190,13 @@ class _BaseToolRegistry:
 
     def __init__(self, safety_profile: Optional[str] = None) -> None:
         self.tools: Dict[str, Tool] = {}
-        profile = (
-            safety_profile or os.getenv("WORKFLOW_SAFETY_PROFILE", "safe")
+        profile = str(
+            safety_profile or os.getenv("WORKFLOW_SAFETY_PROFILE") or "safe"
         ).strip().lower()
         self.safety_profile = profile if profile in {"safe", "full"} else "safe"
         sandbox_root = os.getenv("WORKFLOW_OUTPUT_DIR")
         self.sandbox_root = os.path.abspath(sandbox_root) if sandbox_root else None
+        self._cached_llm_client: Optional[Any] = None
         self._register_default_tools()
 
     # ----- registration plumbing -----------------------------------------
@@ -187,8 +223,15 @@ class _BaseToolRegistry:
     def list_tools(self) -> List[Tool]:
         return list(self.tools.values())
 
+    def required_params_map(self) -> Dict[str, List[str]]:
+        return {
+            tool.name: tool.required_params()
+            for tool in self.list_tools()
+            if tool.required_params()
+        }
+
     def _wrap_tool_function(self, tool_name: str, func: Callable) -> Callable:
-        def wrapped(*args, **kwargs):  # type: ignore[no-untyped-def]
+        def wrapped(*args, **kwargs):
             try:
                 raw = func(*args, **kwargs)
             except Exception as exc:  # pragma: no cover - defensive
@@ -274,6 +317,56 @@ class _BaseToolRegistry:
     # ----- shared helpers -------------------------------------------------
 
     @classmethod
+    def _request_public_http(
+        cls,
+        method: str,
+        url: str,
+        timeout: TimeoutLike = 30,
+        headers: Optional[Dict[str, str]] = None,
+        **kwargs: Any,
+    ) -> requests.Response:
+        """HTTP request that re-validates the URL (and DNS) on every redirect hop."""
+        current = url
+        method = (method or "GET").upper()
+        timeout_pair = _http_timeout_pair(timeout)
+        merged_headers = {**cls._BROWSER_HEADERS, **(headers or {})}
+        body_kwargs: Dict[str, Any] = {}
+        extra_kwargs: Dict[str, Any] = {}
+        for key, value in kwargs.items():
+            if key in {"json", "data"}:
+                body_kwargs[key] = value
+            else:
+                extra_kwargs[key] = value
+
+        for _hop in range(_MAX_REDIRECTS + 1):
+            _validate_public_http_url(current)
+            req_kwargs = dict(extra_kwargs)
+            if method in {"POST", "PUT", "PATCH"}:
+                req_kwargs.update(body_kwargs)
+            response = requests.request(
+                method,
+                current,
+                timeout=timeout_pair,
+                headers=merged_headers,
+                allow_redirects=False,
+                **req_kwargs,
+            )
+            status = int(getattr(response, "status_code", 0) or 0)
+            if status not in _REDIRECT_STATUSES:
+                return response
+            location = ""
+            raw_headers = getattr(response, "headers", None) or {}
+            if hasattr(raw_headers, "get"):
+                location = str(raw_headers.get("Location") or raw_headers.get("location") or "")
+            if not location.strip():
+                return response
+            current = urljoin(current, location.strip())
+            if status in {301, 302, 303} and method != "HEAD":
+                method = "GET"
+                body_kwargs = {}
+        raise ValueError("Too many HTTP redirects")
+
+    @classmethod
     def _request_with_retry(
         cls,
         url: str,
@@ -283,23 +376,21 @@ class _BaseToolRegistry:
         headers: Optional[Dict[str, str]] = None,
     ) -> requests.Response:
         """GET ``url`` with exponential backoff for transient request failures."""
-        _validate_public_http_url(url)
-        merged_headers = {**cls._BROWSER_HEADERS, **(headers or {})}
-        timeout_pair = _http_timeout_pair(timeout)
         last_exc: Optional[Exception] = None
+        tried = 0
         for attempt in range(1, attempts + 1):
+            tried = attempt
             try:
-                response = requests.get(
-                    url, timeout=timeout_pair, headers=merged_headers
+                response = cls._request_public_http(
+                    "GET", url, timeout=timeout, headers=headers
                 )
                 response.raise_for_status()
                 return response
-            except requests.RequestException as exc:
+            except (requests.RequestException, ValueError) as exc:
                 last_exc = exc
                 if attempt == attempts or _http_error_unlikely_to_recover(exc):
                     break
                 time.sleep(base_backoff * (2 ** (attempt - 1)))
-        tried = attempt  # loop always assigns on last iteration
         att_word = "attempt" if tried == 1 else "attempts"
         raise RuntimeError(f"Request failed after {tried} {att_word}: {last_exc}")
 

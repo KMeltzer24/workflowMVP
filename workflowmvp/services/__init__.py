@@ -1,7 +1,7 @@
 """Service modules for the WorkflowMVP Flask app.
 
 Splitting them out keeps ``main.py`` focused on routing while putting the
-runtime concerns (sandbox paths, subprocess sandboxing, examples,
+runtime concerns (run directories, subprocess rlimits, examples,
 credentials) into individually testable modules.
 """
 
