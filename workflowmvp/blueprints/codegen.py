@@ -102,11 +102,14 @@ def generate_workflow():
         agent = WorkflowAgent(api_key=api_key, model=model)
         agent.generate_workflow_code(steps, output_path)
         generation_seconds = round(time.monotonic() - t_gen0, 3)
+        with open(output_path, encoding="utf-8") as generated:
+            code = generated.read()
 
         return jsonify(
             {
                 "success": True,
                 "output_path": os.path.relpath(output_path, PROJECT_ROOT),
+                "code": code,
                 "message": "Workflow generated successfully",
                 "generation_seconds": generation_seconds,
                 "validation_warnings": validation_warnings,
@@ -127,6 +130,20 @@ def check_requirements():
         return jsonify({"success": True, "missing": missing})
     except Exception as exc:
         return json_internal_error(exc)
+
+
+@bp.route("/api/generated-source", methods=["GET"])
+def generated_source():
+    workflow_path = request.args.get("workflow_path", "")
+    abs_path = resolve_workflow_path(workflow_path)
+    if not abs_path:
+        return json_error("Workflow file not found", 404)
+    try:
+        with open(abs_path, encoding="utf-8") as handle:
+            code = handle.read()
+    except OSError as exc:
+        return json_error(f"Could not read file: {exc}", 400)
+    return jsonify({"success": True, "code": code, "workflow_path": workflow_path})
 
 
 @bp.route("/api/validate-workflow", methods=["POST"])

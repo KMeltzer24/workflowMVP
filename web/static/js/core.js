@@ -20,9 +20,12 @@ const CREDENTIAL_KEYS = [
     "SMTP_PORT",
 ];
 
+const TAB_ORDER = ["workspace", "examples", "tools"];
+
 const state = {
     parsedSteps: [],
     currentWorkflowPath: null,
+    generatedCode: "",
     stepsEdited: false,
     streaming: false,
     parseConfidence: null,
@@ -84,7 +87,7 @@ function refreshSavedList() {
     if (!select) return;
     const saved = loadSavedWorkflows();
     const names = Object.keys(saved).sort();
-    select.innerHTML = '<option value="">Load saved workflow...</option>';
+    select.innerHTML = '<option value="">Load saved…</option>';
     for (const name of names) {
         const option = document.createElement("option");
         option.value = name;
@@ -113,18 +116,32 @@ function toast(message, variant = "info") {
 
 function activateTab(name) {
     document.querySelectorAll(".tab").forEach((btn) => {
-        btn.classList.toggle("active", btn.dataset.tab === name);
+        const on = btn.dataset.tab === name;
+        btn.classList.toggle("active", on);
+        btn.setAttribute("aria-selected", on ? "true" : "false");
+        btn.tabIndex = on ? 0 : -1;
     });
     document.querySelectorAll(".tab-panel").forEach((panel) => {
         panel.classList.toggle("active", panel.id === `tab-${name}`);
     });
-    if (name === "run") {
+    if (name === "workspace" && typeof updateRunSummary === "function") {
         updateRunSummary();
     }
 }
 
 document.querySelectorAll(".tab").forEach((btn) => {
     btn.addEventListener("click", () => activateTab(btn.dataset.tab));
+    btn.addEventListener("keydown", (event) => {
+        if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") return;
+        event.preventDefault();
+        const index = TAB_ORDER.indexOf(btn.dataset.tab);
+        if (index < 0) return;
+        const delta = event.key === "ArrowRight" ? 1 : -1;
+        const next = TAB_ORDER[(index + delta + TAB_ORDER.length) % TAB_ORDER.length];
+        activateTab(next);
+        const nextBtn = document.querySelector(`.tab[data-tab="${next}"]`);
+        if (nextBtn) nextBtn.focus();
+    });
 });
 
 // -------------------- Helpers --------------------

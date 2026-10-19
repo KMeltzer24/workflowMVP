@@ -95,44 +95,6 @@ def test_write_xlsx_writes_rows_from_dicts(registry: ToolRegistry, tmp_path: Pat
     ]
 
 
-def test_extract_regex_returns_matches(registry: ToolRegistry) -> None:
-    result = registry.get_tool("extract_regex").function(
-        text="Order A-123 and B-456",
-        pattern=r"([A-Z])-(\d+)",
-        group=2,
-    )
-
-    assert result["success"] is True
-    assert result["result"] == ["123", "456"]
-    assert result["matches"] == result["result"]
-    assert result["meta"]["count"] == 2
-
-
-def test_replace_text_returns_replaced_text(registry: ToolRegistry) -> None:
-    result = registry.get_tool("replace_text").function(
-        text="red blue red",
-        old="red",
-        new="green",
-        count=1,
-    )
-
-    assert result["success"] is True
-    assert result["result"] == "green blue red"
-    assert result["text"] == result["result"]
-
-
-def test_split_text_returns_parts(registry: ToolRegistry) -> None:
-    result = registry.get_tool("split_text").function(
-        text="alpha,beta,gamma",
-        delimiter=",",
-    )
-
-    assert result["success"] is True
-    assert result["result"] == ["alpha", "beta", "gamma"]
-    assert result["parts"] == result["result"]
-    assert result["meta"]["count"] == 3
-
-
 def test_append_file(registry: ToolRegistry, tmp_path: Path) -> None:
     p = tmp_path / "log.txt"
     a1 = registry.get_tool("append_file").function(file_path=str(p), content="one\n")
@@ -143,12 +105,15 @@ def test_append_file(registry: ToolRegistry, tmp_path: Path) -> None:
     assert raw == "one\ntwo"
 
 
-def test_hash_file(registry: ToolRegistry, tmp_path: Path) -> None:
-    p = tmp_path / "blob.bin"
-    p.write_bytes(b"hello")
-    h = registry.get_tool("hash_file").function(file_path=str(p), algorithm="sha256")
-    assert h["success"] is True
-    assert h["hex_digest"] == "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+def test_write_file_accepts_data_alias(
+    registry: ToolRegistry, tmp_path: Path
+) -> None:
+    path = tmp_path / "alias.txt"
+    result = registry.get_tool("write_file").function(
+        file_path=str(path), data="from-data"
+    )
+    assert result["success"] is True
+    assert path.read_text() == "from-data"
 
 
 def test_get_current_time_utc(registry: ToolRegistry) -> None:
@@ -427,8 +392,6 @@ def test_harmless_tools_return_standardized_response_envelope(
 ) -> None:
     text_path = tmp_path / "note.txt"
     json_path = tmp_path / "data.json"
-    hash_path = tmp_path / "blob.txt"
-    hash_path.write_text("hello", encoding="utf-8")
 
     responses = [
         registry.get_tool("write_file").function(
@@ -441,7 +404,10 @@ def test_harmless_tools_return_standardized_response_envelope(
             data={"ok": True},
         ),
         registry.get_tool("read_json").function(file_path=str(json_path)),
-        registry.get_tool("hash_file").function(file_path=str(hash_path)),
+        registry.get_tool("append_file").function(
+            file_path=str(text_path),
+            content="!",
+        ),
         registry.get_tool("get_current_time").function(timezone="UTC"),
         registry.get_tool("render_template").function(
             template="Hello {{ name }}",

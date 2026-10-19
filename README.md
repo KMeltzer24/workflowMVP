@@ -60,21 +60,20 @@ Key paths:
 - `workflowmvp/agent.py` — Gemini cleanup and code generation.
 - `workflowmvp/services/code_policy.py` — AST import/call policy on generated scripts.
 - `workflowmvp/tools/` — built-in registry used by generated scripts.
-- `web/` — browser UI (`web/static/js/` is vanilla JS, one file per tab).
+- `web/` — workspace UI (steps, generated Python, live run) plus Examples and Tools tabs.
 - `examples/` — sample CSV and recordings.
 - `tests/` — pytest for parser, tools, API, codegen validation, and video framing.
 
 ## Tool System
 
-Generated scripts call `ToolRegistry` instead of inventing file, network, email, and parsing logic. The registry currently exposes 34 built-in tools:
+Generated scripts call `ToolRegistry` instead of inventing file, network, email, and parsing logic. The registry currently exposes 30 built-in tools:
 
 | Category | Tools | What they do |
 | --- | --- | --- |
-| Files | `read_file`, `write_file`, `append_file`, `list_files`, `create_directory`, `copy_file`, `move_file`, `delete_file`, `hash_file` | File and directory operations inside the per-run output directory. |
+| Files | `read_file`, `write_file`, `append_file`, `list_files`, `create_directory`, `copy_file`, `move_file`, `delete_file` | File and directory operations inside the per-run output directory. |
 | Structured files | `read_csv`, `write_csv`, `read_json`, `write_json`, `read_xlsx`, `write_xlsx`, `read_pdf` | Common data formats and PDF text. |
 | Network | `download`, `http_request`, `scrape_webpage`, `discover_urls` | Public HTTP fetch, APIs, readable page text, same-site URL discovery. |
 | AI and templates | `generate_text`, `render_template` | Gemini text or Jinja2 templates. |
-| Text processing | `extract_regex`, `replace_text`, `split_text` | Deterministic text transforms. |
 | Communication | `send_email`, `send_notification` | SMTP email or local desktop notifications. |
 | Data and finance | `sqlite_query`, `sqlite_insert`, `fetch_stock_price` | Local SQLite and recent market prices. |
 | Time and archives | `wait`, `get_current_time`, `compress_files`, `extract_archive` | Timing, timestamps, ZIP create/extract. |

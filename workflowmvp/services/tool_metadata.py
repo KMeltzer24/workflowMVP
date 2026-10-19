@@ -16,7 +16,6 @@ TOOL_CATEGORIES: Dict[str, str] = {
     "copy_file": "filesystem",
     "move_file": "filesystem",
     "delete_file": "filesystem",
-    "hash_file": "filesystem",
     "read_csv": "filesystem",
     "write_csv": "filesystem",
     "read_xlsx": "filesystem",
@@ -48,10 +47,6 @@ TOOL_CATEGORIES: Dict[str, str] = {
     # database
     "sqlite_query": "database",
     "sqlite_insert": "database",
-    # text
-    "extract_regex": "text",
-    "replace_text": "text",
-    "split_text": "text",
 }
 
 CATEGORY_ORDER = (
@@ -60,7 +55,6 @@ CATEGORY_ORDER = (
     "network",
     "finance",
     "ai",
-    "text",
     "time",
     "comms",
     "system",
@@ -73,7 +67,6 @@ CATEGORY_LABELS: Dict[str, str] = {
     "network": "Network & Web",
     "finance": "Finance",
     "ai": "AI & Templating",
-    "text": "Text Processing",
     "time": "Time",
     "comms": "Communications",
     "system": "System",

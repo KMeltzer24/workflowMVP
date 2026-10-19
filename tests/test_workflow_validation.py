@@ -61,15 +61,15 @@ def test_unknown_action_is_invalid() -> None:
 def test_registry_tool_action_is_allowed() -> None:
     result = validate_workflow_steps([
         _valid_step(
-            description="Extract order numbers from text",
-            action="extract_regex",
-            parameters={"text": "Order 123", "pattern": r"\d+"},
+            description='Write hello to file note.txt',
+            action="write_file",
+            parameters={"file_path": "note.txt", "content": "hello"},
         )
     ])
 
     assert result.valid is True
     assert result.errors == []
-    assert result.steps[0].action == "extract_regex"
+    assert result.steps[0].action == "write_file"
 
 
 def test_missing_required_param_is_invalid() -> None:
@@ -91,7 +91,7 @@ def test_side_effecting_action_produces_warning() -> None:
         _valid_step(
             description='Write "hello" to file "note.txt"',
             action="write_file",
-            parameters={"file_path": "note.txt"},
+                parameters={"file_path": "note.txt", "content": "hello"},
         )
     ])
 

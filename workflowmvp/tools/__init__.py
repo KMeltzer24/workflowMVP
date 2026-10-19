@@ -23,7 +23,6 @@ from .finance import FinanceToolsMixin
 from .network import NetworkToolsMixin
 from .notifications import NotificationToolsMixin
 from .system import SystemToolsMixin
-from .text import TextToolsMixin
 
 
 class ToolRegistry(
@@ -35,7 +34,6 @@ class ToolRegistry(
     SystemToolsMixin,
     DatabaseToolsMixin,
     ArchiveToolsMixin,
-    TextToolsMixin,
 ):
     """Concrete registry composed from per-category mixins.
 
@@ -52,7 +50,6 @@ class ToolRegistry(
         self._register_system_tools()
         self._register_database_tools()
         self._register_archive_tools()
-        self._register_text_tools()
 
 
 __all__ = ["P", "Tool", "ToolRegistry", "parameter_descriptions", "requests"]

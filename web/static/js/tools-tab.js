@@ -40,7 +40,7 @@ function buildToolCategoryOptions(tools) {
 }
 
 function renderTools() {
-    const host = document.getElementById("tools");
+    const host = document.getElementById("toolsBody") || document.getElementById("tools");
     if (!host) return;
     const search = (document.getElementById("toolSearchInput").value || "")
         .trim()
@@ -56,18 +56,17 @@ function renderTools() {
 
     host.innerHTML = "";
     for (const tool of filtered) {
-        const card = document.createElement("div");
-        card.className = "card";
-        card.innerHTML = `
-            <h3>${escapeHtml(tool.name)}</h3>
-            <p>${escapeHtml(tool.description || "")}</p>
-            <p class="muted" style="margin-top:8px"><code>${
-                Object.keys(tool.parameters || {})
-                    .map(escapeHtml)
-                    .join(", ") || "(no parameters)"
-            }</code></p>
+        const required = Array.isArray(tool.required) ? tool.required : [];
+        const params = Object.keys(tool.parameters || {});
+        const row = document.createElement("tr");
+        row.innerHTML = `
+            <td><code>${escapeHtml(tool.name)}</code></td>
+            <td>${escapeHtml(toolCategory(tool))}</td>
+            <td>${required.length ? required.map(escapeHtml).join(", ") : "—"}</td>
+            <td><code>${params.map(escapeHtml).join(", ") || "—"}</code></td>
         `;
-        host.appendChild(card);
+        row.title = tool.description || "";
+        host.appendChild(row);
     }
     document.getElementById("toolCountPill").textContent =
         `${filtered.length} / ${state.tools.length} tools`;

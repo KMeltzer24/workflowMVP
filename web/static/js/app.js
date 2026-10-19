@@ -44,8 +44,13 @@ document.getElementById("saveBtn").addEventListener("click", () => {
         toast("Nothing to save", "warning");
         return;
     }
-    const name = prompt("Save as:");
-    if (!name) return;
+    const nameInput = document.getElementById("saveName");
+    const name = (nameInput && nameInput.value.trim()) || "";
+    if (!name) {
+        toast("Enter a name next to Save", "warning");
+        if (nameInput) nameInput.focus();
+        return;
+    }
     const all = loadSavedWorkflows();
     all[name] = { text, savedAt: new Date().toISOString() };
     persistSavedWorkflows(all);
@@ -84,6 +89,15 @@ document.getElementById("generateBtn").addEventListener("click", generateWorkflo
 document.getElementById("runBtn").addEventListener("click", runWorkflow);
 document.getElementById("clearLogsBtn").addEventListener("click", () => {
     document.getElementById("runOutput").innerHTML = "";
+});
+document.getElementById("copyCodeBtn").addEventListener("click", async () => {
+    if (!state.generatedCode) return;
+    try {
+        await navigator.clipboard.writeText(state.generatedCode);
+        toast("Copied generated Python", "success");
+    } catch (_) {
+        toast("Could not copy", "error");
+    }
 });
 document.getElementById("toolSearchInput").addEventListener("input", renderTools);
 document.getElementById("toolCategorySelect").addEventListener("change", renderTools);

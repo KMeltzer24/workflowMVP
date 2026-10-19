@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import csv
-import hashlib
 import json
 import os
 import shutil
@@ -37,7 +36,7 @@ class FilesystemToolsMixin(_BaseToolRegistry):
             side_effects=("write",),
             parameters={
                 "file_path": P("Path to the file to write", required=True),
-                "content": P("Content to write"),
+                "content": P("Text to write (also accepted as `data`)", required=True),
                 "encoding": P("File encoding (default: utf-8)"),
             },
         ))
@@ -176,16 +175,6 @@ class FilesystemToolsMixin(_BaseToolRegistry):
             },
         ))
         self.register_tool(Tool(
-            name="hash_file",
-            description="Compute a cryptographic hash of file contents (default SHA-256, hex-encoded).",
-            function=self._hash_file,
-            category=fs,
-            parameters={
-                "file_path": P("Path to the file", required=True),
-                "algorithm": P("Hash name, e.g. sha256, sha1, md5 (default: sha256)"),
-            },
-        ))
-        self.register_tool(Tool(
             name="read_pdf",
             description=(
                 "Extract plain text from a PDF file using pypdf. "
@@ -214,16 +203,25 @@ class FilesystemToolsMixin(_BaseToolRegistry):
             return {"success": False, "error": str(e)}
 
     def _write_file(
-        self, file_path: str, content: str, encoding: str = "utf-8"
+        self,
+        file_path: str,
+        content: Any = None,
+        encoding: str = "utf-8",
+        data: Any = None,
     ) -> Dict[str, Any]:
         try:
+            payload = content if content is not None else data
+            if payload is None:
+                return {"success": False, "error": "content is required"}
+            if not isinstance(payload, str):
+                payload = json.dumps(payload, ensure_ascii=False)
             safe_path = self._sandbox_path(file_path)
             parent = os.path.dirname(safe_path)
             if parent:
                 os.makedirs(parent, exist_ok=True)
             with open(safe_path, "w", encoding=encoding) as f:
-                f.write(content)
-            return {"success": True, "file": safe_path, "size": len(content)}
+                f.write(payload)
+            return {"success": True, "file": safe_path, "size": len(payload)}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -487,27 +485,6 @@ class FilesystemToolsMixin(_BaseToolRegistry):
             with open(safe_path, "a", encoding=encoding) as f:
                 f.write(content)
             return {"success": True, "file": safe_path, "size": len(content)}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-
-    def _hash_file(
-        self, file_path: str, algorithm: str = "sha256"
-    ) -> Dict[str, Any]:
-        try:
-            safe_path = self._sandbox_path(file_path)
-            algo = (algorithm or "sha256").lower()
-            h = hashlib.new(algo)
-            with open(safe_path, "rb") as f:
-                for chunk in iter(lambda: f.read(65536), b""):
-                    h.update(chunk)
-            digest = h.hexdigest()
-            return {
-                "success": True,
-                "hex_digest": digest,
-                "algorithm": algo,
-                "file_path": file_path,
-                "result": digest,
-            }
         except Exception as e:
             return {"success": False, "error": str(e)}
 

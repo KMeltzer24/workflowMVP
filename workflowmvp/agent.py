@@ -94,7 +94,6 @@ _TOOL_GUIDANCE: Dict[str, str] = {
         "   wj.function(file_path='out.json', data={'ok': True}, indent=2)"
     ),
     "append_file": "APPEND / LOG LINES — append_file adds text without reading the whole file first.",
-    "hash_file": "FILE INTEGRITY — hash_file(file_path='backup.zip', algorithm='sha256') returns hex_digest.",
     "get_current_time": (
         "DATE & TIME — get_current_time(timezone='…') returns iso, unix, timezone (any **IANA** name). "
         "Use for clocks in workflows and emails; combine with `zoneinfo` in code when you need "

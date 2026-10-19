@@ -36,7 +36,7 @@ async function loadExamples() {
                 document.getElementById("workflowText").value = example.workflow;
                 document.querySelector("input[name='inputType'][value='text']").checked = true;
                 toggleInputType();
-                activateTab("create");
+                activateTab("workspace");
                 parseWorkflow();
                 toast(`Loaded: ${example.name}`, "success");
             });

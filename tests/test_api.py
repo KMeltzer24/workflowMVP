@@ -18,6 +18,8 @@ def test_index_page_renders(client) -> None:
     assert "WorkflowMVP" in html
     assert "js/core.js" in html
     assert "js/create-tab.js" in html
+    assert "workspace-grid" in html
+    assert "generatedCode" in html
 
 
 def test_tools_endpoint(client) -> None:
@@ -26,7 +28,7 @@ def test_tools_endpoint(client) -> None:
     payload = response.get_json()
     assert isinstance(payload, list)
     names = {tool["name"] for tool in payload}
-    assert len(payload) == len(names) == 34
+    assert len(payload) == len(names) == 30
     expected = {
         "append_file",
         "compress_files",
@@ -36,11 +38,9 @@ def test_tools_endpoint(client) -> None:
         "discover_urls",
         "download",
         "extract_archive",
-        "extract_regex",
         "fetch_stock_price",
         "generate_text",
         "get_current_time",
-        "hash_file",
         "http_request",
         "list_files",
         "move_file",
@@ -50,13 +50,11 @@ def test_tools_endpoint(client) -> None:
         "read_pdf",
         "read_xlsx",
         "render_template",
-        "replace_text",
         "scrape_webpage",
         "send_email",
         "send_notification",
         "sqlite_insert",
         "sqlite_query",
-        "split_text",
         "wait",
         "write_csv",
         "write_file",
@@ -352,6 +350,14 @@ def test_generate_workflow_repairs_invalid_steps_before_codegen(client) -> None:
     payload = response.get_json()
     assert payload["success"] is True
     assert payload["ai_repaired_for_generation"] is True
+    assert payload["code"] == "print('ok')\n"
+
+    source = client.get(
+        "/api/generated-source",
+        query_string={"workflow_path": payload["output_path"]},
+    )
+    assert source.status_code == 200
+    assert source.get_json()["code"] == "print('ok')\n"
 
 
 def test_run_workflow_rejects_path_outside_generated_dir(client, tmp_path) -> None:

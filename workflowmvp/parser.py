@@ -238,10 +238,6 @@ class WorkflowParser:
         if 'append' in words and ('file' in words or 'log' in words):
             return 'append_file', self._extract_append_params(description)
 
-        if ('hash' in words or 'checksum' in words or 'sha256' in d) and \
-                ('file' in words or '.json' in d or '.txt' in d or '.csv' in d):
-            return 'hash_file', self._extract_file_params(description)
-
         if ('current' in words or 'now' in words) and 'time' in words:
             return 'get_current_time', self._extract_time_params(description)
 

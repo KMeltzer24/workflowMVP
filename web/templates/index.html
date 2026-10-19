@@ -23,11 +23,10 @@
         </div>
     </header>
 
-    <nav class="tabs" role="tablist">
-        <button class="tab active" data-tab="create" role="tab">Create</button>
-        <button class="tab" data-tab="run" role="tab">Run</button>
-        <button class="tab" data-tab="examples" role="tab">Examples</button>
-        <button class="tab" data-tab="tools" role="tab">Tools</button>
+    <nav class="tabs" role="tablist" aria-label="Primary">
+        <button class="tab active" data-tab="workspace" role="tab" aria-selected="true" aria-controls="tab-workspace" id="tab-btn-workspace" tabindex="0">Workspace</button>
+        <button class="tab" data-tab="examples" role="tab" aria-selected="false" aria-controls="tab-examples" id="tab-btn-examples" tabindex="-1">Examples</button>
+        <button class="tab" data-tab="tools" role="tab" aria-selected="false" aria-controls="tab-tools" id="tab-btn-tools" tabindex="-1">Tools</button>
     </nav>
 
     <main class="container">
@@ -40,10 +39,11 @@
                 under CPU/memory rlimits &mdash; a constrained demo, not an OS sandbox.
             </p>
         </section>
-        <section class="tab-panel active" id="tab-create" role="tabpanel">
+
+        <section class="tab-panel active" id="tab-workspace" role="tabpanel" aria-labelledby="tab-btn-workspace">
             <div class="panel">
                 <div class="panel-header">
-                    <h2>Create workflow</h2>
+                    <h2>Describe</h2>
                     <div class="input-type">
                         <label>
                             <input type="radio" name="inputType" value="text" checked>
@@ -58,7 +58,7 @@
 
                 <div id="textInput">
                     <textarea id="workflowText" spellcheck="false"
-                        placeholder="Enter your workflow steps&#10;&#10;Example:&#10;1. Download https://api.example.com/data&#10;2. Process the JSON response&#10;3. Send notification &quot;Done&quot;"></textarea>
+                        placeholder="Enter numbered steps&#10;&#10;Example:&#10;1. Wait for 1 second&#10;2. Write hello to file note.txt"></textarea>
                 </div>
 
                 <div id="videoInput" class="hidden">
@@ -68,82 +68,104 @@
                     </div>
                 </div>
 
-                <div class="actions">
+                <div class="actions save-row">
                     <button class="primary" id="parseBtn" type="button">Parse workflow</button>
+                    <input id="saveName" type="text" placeholder="Save as…" maxlength="80" aria-label="Workflow name">
                     <button class="ghost" id="saveBtn" type="button">Save</button>
-                    <select id="savedList" class="select">
-                        <option value="">Load saved workflow...</option>
+                    <select id="savedList" class="select" aria-label="Load saved workflow">
+                        <option value="">Load saved…</option>
                     </select>
                     <button class="ghost" id="deleteSavedBtn" type="button">Delete</button>
                 </div>
             </div>
 
-            <div class="panel" id="stepsPanel" hidden>
-                <div class="panel-header">
-                    <h2>Parsed steps</h2>
-                    <span class="pill" id="stepCountPill">0 steps</span>
+            <div class="workspace-grid">
+                <div class="panel workspace-col">
+                    <div class="panel-header">
+                        <h2>Steps</h2>
+                        <span class="pill" id="stepCountPill">0 steps</span>
+                    </div>
+                    <p class="muted steps-edit-hint">
+                        Edit a step, then generate. Saving a line re-parses its action.
+                    </p>
+                    <div id="parseInsights" class="parse-insights hidden" aria-live="polite"></div>
+                    <div id="parsedSteps">
+                        <p class="empty-hint" id="stepsEmpty">Parse a workflow to see steps here.</p>
+                    </div>
+                    <div class="actions">
+                        <button class="primary" id="generateBtn" type="button" disabled>Generate Python</button>
+                    </div>
+                    <div id="generateStatus" class="generate-status hidden" role="status" aria-live="polite" aria-atomic="true"></div>
                 </div>
-                <p class="muted steps-edit-hint">
-                    Edit steps below before <strong>Generate Python code</strong> — fix emails, wording, and logic.
-                    Saving a step re-runs the rule parser on that line so <strong>Action</strong> and parameters stay in sync.
-                </p>
-                <div id="parseInsights" class="parse-insights hidden" aria-live="polite"></div>
-                <div id="parsedSteps"></div>
-                <div class="actions">
-                    <button class="primary" id="generateBtn" type="button" disabled>Generate Python code</button>
+
+                <div class="panel workspace-col">
+                    <div class="panel-header">
+                        <h2>Generated Python</h2>
+                        <button class="ghost" id="copyCodeBtn" type="button" disabled>Copy</button>
+                    </div>
+                    <p class="muted" id="codeMeta">Generate a script to inspect it before running.</p>
+                    <pre id="generatedCode" class="code-view" aria-live="polite"><span class="empty-hint">No script yet.</span></pre>
                 </div>
-                <div id="generateStatus" class="generate-status hidden" role="status" aria-live="polite" aria-atomic="true"></div>
+
+                <div class="panel workspace-col">
+                    <div class="panel-header">
+                        <h2>Run</h2>
+                        <span id="runStatusPill" class="pill">idle</span>
+                    </div>
+                    <p class="muted" id="runMeta">Generate Python to enable Run.</p>
+                    <div class="actions">
+                        <button class="primary" id="runBtn" type="button" disabled>Run workflow</button>
+                        <button class="ghost" id="clearLogsBtn" type="button">Clear logs</button>
+                    </div>
+                    <pre id="runOutput" class="terminal" aria-live="polite"></pre>
+                </div>
             </div>
         </section>
 
-        <section class="tab-panel" id="tab-run" role="tabpanel">
-            <div class="panel">
-                <div class="panel-header">
-                    <h2>Run workflow</h2>
-                    <span id="runStatusPill" class="pill">idle</span>
-                </div>
-                <p class="muted" id="runMeta">Generate Python code from a parsed workflow to enable the run button.</p>
-                <div class="actions">
-                    <button class="primary" id="runBtn" type="button" disabled>Run generated workflow</button>
-                    <button class="ghost" id="clearLogsBtn" type="button">Clear logs</button>
-                </div>
-                <pre id="runOutput" class="terminal" aria-live="polite"></pre>
-            </div>
-        </section>
-
-        <section class="tab-panel" id="tab-examples" role="tabpanel">
+        <section class="tab-panel" id="tab-examples" role="tabpanel" aria-labelledby="tab-btn-examples">
             <div class="panel">
                 <div class="panel-header">
                     <h2>Examples</h2>
                     <span id="examplesCountPill" class="pill">— baked-in demos</span>
                 </div>
+                <p class="muted">Click an example to load it into the workspace and parse.</p>
                 <div id="examples" class="cards"></div>
             </div>
         </section>
 
-        <section class="tab-panel" id="tab-tools" role="tabpanel">
+        <section class="tab-panel" id="tab-tools" role="tabpanel" aria-labelledby="tab-btn-tools">
             <div class="panel">
                 <div class="panel-header">
-                    <h2>Available tools</h2>
+                    <h2>Tool registry</h2>
                     <span id="toolCountPill" class="pill">0 tools</span>
                 </div>
                 <p class="muted tools-intro">
-                    Loaded from <code>/api/tools</code> &mdash; <span id="toolRegistryTotalNote">waiting for registry…</span>.
-                    Cards map to parameters your prose can ground after parsing. Categories filter; search scans names,
-                    descriptions, and parameter keys with <code>X / N tools</code> showing filtered vs&nbsp;listed.
+                    <span id="toolRegistryTotalNote">waiting for registry…</span>
+                    Search names, descriptions, and parameters.
                 </p>
                 <div class="tool-controls">
-                    <input id="toolSearchInput" type="text" placeholder="Search tools by name, description, or parameter...">
+                    <input id="toolSearchInput" type="text" placeholder="Search tools…">
                     <select id="toolCategorySelect" class="select">
                         <option value="all">All categories</option>
                     </select>
                 </div>
-                <div id="tools" class="cards tool-cards"></div>
+                <div class="tool-table-wrap">
+                    <table class="tool-table" id="tools">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Category</th>
+                                <th>Required</th>
+                                <th>Parameters</th>
+                            </tr>
+                        </thead>
+                        <tbody id="toolsBody"></tbody>
+                    </table>
+                </div>
             </div>
         </section>
     </main>
 
-    <!-- Settings modal -->
     <div class="modal-backdrop hidden" id="settingsModal">
         <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
             <div class="modal-header">
@@ -183,7 +205,6 @@
         </div>
     </div>
 
-    <!-- Inline missing-cred prompt -->
     <div class="modal-backdrop hidden" id="promptModal">
         <div class="modal" role="dialog" aria-modal="true" aria-labelledby="promptTitle">
             <div class="modal-header">
@@ -205,7 +226,6 @@
         </div>
     </div>
 
-    <!-- Toast stack -->
     <div id="toasts" class="toasts" aria-live="polite"></div>
 
     <script src="{{ url_for('static', filename='js/core.js') }}"></script>

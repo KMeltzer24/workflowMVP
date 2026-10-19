@@ -145,7 +145,26 @@ function stopParseProgress() {
 function enableGenerate(enabled) {
     const btn = document.getElementById("generateBtn");
     btn.disabled = !enabled;
-    btn.textContent = "Generate Python code";
+    btn.textContent = "Generate Python";
+}
+
+function showGeneratedCode(code, path) {
+    const view = document.getElementById("generatedCode");
+    const meta = document.getElementById("codeMeta");
+    const copyBtn = document.getElementById("copyCodeBtn");
+    state.generatedCode = code || "";
+    if (!view) return;
+    if (state.generatedCode) {
+        view.textContent = state.generatedCode;
+    } else {
+        view.innerHTML = '<span class="empty-hint">No script yet.</span>';
+    }
+    if (meta) {
+        meta.textContent = path
+            ? `Saved as ${path}`
+            : "Generate a script to inspect it before running.";
+    }
+    if (copyBtn) copyBtn.disabled = !state.generatedCode;
 }
 
 function displaySteps(steps) {
@@ -177,7 +196,6 @@ function displaySteps(steps) {
         `;
         host.appendChild(div);
     });
-    document.getElementById("stepsPanel").hidden = false;
     document.getElementById("stepCountPill").textContent = `${steps.length} steps`;
 }
 
@@ -222,7 +240,7 @@ function saveStep(index) {
             }
             toggleEdit(index);
             const generateBtn = document.getElementById("generateBtn");
-            generateBtn.textContent = "Generate Python code (modified)";
+            generateBtn.textContent = "Generate Python (modified)";
             markParseInsightsStale();
             toast(`Updated step ${index + 1}`, "success");
         });
@@ -436,10 +454,11 @@ async function generateWorkflow() {
         const gs = data.generation_seconds;
         const sec = typeof gs === "number" ? gs : parseFloat(gs);
         state.lastGenerationSeconds = Number.isFinite(sec) ? sec : null;
+        showGeneratedCode(data.code || "", data.output_path);
         document.getElementById("runBtn").disabled = false;
         updateRunSummary();
         toast("Python code generated", "success");
-        activateTab("run");
+        activateTab("workspace");
     } catch (err) {
         toast(`Generate error: ${err.message}`, "error");
     } finally {
