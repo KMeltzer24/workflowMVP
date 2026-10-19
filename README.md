@@ -16,7 +16,7 @@ It is an AI-engineering sample, not a hosted automation platform. Rule-based par
 4. Run that script from the browser.
 5. Stream stdout/stderr through Server-Sent Events.
 
-![Parse a numbered workflow in the Create tab](docs/images/ui-create.png)
+![Workspace: describe, parsed steps, generated Python, and live run](docs/images/ui-workspace.png)
 
 The UI is vanilla JavaScript split by tab (`web/static/js/core.js`, `create-tab.js`, `run-tab.js`, `examples-tab.js`, `tools-tab.js`, `app.js`) with no bundler.
 
